@@ -79,19 +79,73 @@ class SecCardClient:
                 return c
         return None
 
+    def detect_credentials_source(self) -> tuple[str, Path] | None:
+        """优先检测 credentials.json（mitmproxy 自动嗅探生成），其次检测 cl.saz"""
+        json_cand = BACKEND_DIR / "data" / "credentials.json"
+        if json_cand.exists():
+            return ("json", json_cand)
+        saz = self.detect_saz_path()
+        if saz:
+            return ("saz", saz)
+        return None
+
     def check_and_reload(self, force: bool = False):
-        """文件修改热检测：一旦检测到 cl.saz 产生新改动，自动秒级重新解析加载最新凭据"""
-        found = self.detect_saz_path()
-        if not found:
+        """文件修改热检测：一旦检测到 credentials.json 或 cl.saz 产生新改动，自动秒级重新解析加载最新凭据"""
+        source = self.detect_credentials_source()
+        if not source:
             return
-        self.saz_path = found
+        stype, spath = source
+        self.saz_path = spath
         try:
-            mtime = self.saz_path.stat().st_mtime
+            mtime = spath.stat().st_mtime
             if force or mtime != self.last_mtime or not self.headers:
-                self.load_credentials()
+                if stype == "json":
+                    self.load_from_json(spath)
+                else:
+                    self.load_credentials()
                 self.last_mtime = mtime
         except Exception:
             pass
+
+    def load_from_json(self, json_path: Path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            headers = data.get("headers", {})
+            params = data.get("search_template") or data.get("template", {})
+            if headers:
+                keep = ("Authorization", "NESign", "Cookie", "X-App-Version", "User-Agent", "Referer", "xweb_xhr", "Accept", "Accept-Encoding", "Accept-Language")
+                lower_map = {k.lower(): v for k, v in headers.items()}
+                self.headers = {}
+                for k in keep:
+                    if k in headers:
+                        self.headers[k] = headers[k]
+                    elif k.lower() in lower_map:
+                        self.headers[k] = lower_map[k.lower()]
+                
+                # 若缺少 encryptedUserId（如仅浏览了日历），从历史 saz 模板继承永久身份字段
+                if not params.get("encryptedUserId"):
+                    saz_cand = self.detect_saz_path()
+                    if saz_cand and saz_cand.exists():
+                        try:
+                            z = zipfile.ZipFile(saz_cand)
+                            for n in z.namelist():
+                                if n.endswith("_c.txt") and "secCardSearchFlights" in z.read(n).decode("utf-8", "ignore"):
+                                    raw = z.read(n)
+                                    head, body = _split(raw)
+                                    btxt = body.decode("utf-8", "replace")
+                                    pj = json.loads(unquote(btxt[len("paras="):]))
+                                    saz_p = json.loads(pj["Parameters"])
+                                    for k in ("certNumber", "encryptedUserId", "secCardGrantTid", "disabilityIDType", "bookingScenario"):
+                                        if k in saz_p and k not in params:
+                                            params[k] = saz_p[k]
+                                    break
+                        except Exception:
+                            pass
+                self.template = params
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔑 成功装载最新登录凭据 (来自 credentials.json，抓取于: {data.get('update_time', '未知')})")
+        except Exception as e:
+            print(f"⚠️ 解析 credentials.json 失败: {e}")
 
     def load_credentials(self):
         if not self.saz_path or not self.saz_path.exists():
@@ -145,7 +199,8 @@ class SecCardClient:
         h["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
         req = urllib.request.Request(API, data=data, headers=h, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=15) as r:
                 raw_bytes = r.read()
                 if raw_bytes[:2] == b"\x1f\x8b":
                     raw_bytes = gzip.decompress(raw_bytes)

@@ -30,6 +30,8 @@ import threading
 import db
 from seccard_client import SecCardClient, CITY_IATA, IATA_CITY
 from scheduler import MonitorScheduler
+from capture_manager import capture_mgr, install_root_cert, uninstall_root_cert, reset_user_auth
+
 
 # 初始化本地 SQLite 数据库
 db.init_db()
@@ -306,6 +308,21 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json({"ok": True, "logs": logs, "count": len(logs)})
             return
 
+        elif path == "/api/auth/status":
+            self.send_json(capture_mgr.get_auth_status())
+            return
+
+        elif path == "/api/capture/status":
+            auth_st = capture_mgr.get_auth_status()
+            self.send_json({
+                "ok": True,
+                "status": capture_mgr.status,
+                "message": capture_mgr.message,
+                "last_capture_time": capture_mgr.last_capture_time,
+                "auth": auth_st
+            })
+            return
+
         # 针对未匹配的 API 请求，直接返回标准 404 JSON，避免落入 SPA 静态 fallback
         if path.startswith("/api/"):
             self.send_json({"ok": False, "error": f"404 API Not Found: {path}"}, 404)
@@ -437,7 +454,9 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         elif path == "/api/patrol/trigger":
-            mode = body.get("mode", "hot")
+            qs = urllib.parse.parse_qs(parsed.query)
+            query_mode = qs.get("mode", [""])[0]
+            mode = body.get("mode") or query_mode or "hot"
             if mode not in ["hot", "all"]:
                 mode = "hot"
             if auto_patrol.PATROL_STATE.get("running"):
@@ -481,6 +500,33 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             msg = "已成功启动全网全量普查 (约397条)，请查看实时进度" if mode == "all" else "已成功启动 Top 30 慢速拟人巡检 (耗时约2~3分钟)，请查看实时进度"
             self.send_json({"ok": True, "mode": mode, "message": msg})
             return
+
+        elif path == "/api/capture/start":
+            res = capture_mgr.start_capture()
+            self.send_json(res, 200 if res.get("ok") else 500)
+            return
+
+        elif path == "/api/capture/stop":
+            res = capture_mgr.stop_capture()
+            self.send_json(res)
+            return
+
+        elif path == "/api/cert/install":
+            res = install_root_cert()
+            self.send_json(res, 200 if res.get("ok") else 500)
+            return
+
+        elif path == "/api/cert/uninstall":
+            res = uninstall_root_cert()
+            self.send_json(res, 200 if res.get("ok") else 500)
+            return
+
+        elif path == "/api/auth/reset":
+            res = reset_user_auth()
+            client.load_credentials()
+            self.send_json(res, 200 if res.get("ok") else 500)
+            return
+
 
         self.send_json({"ok": False, "error": f"404 Not Found: {path}"}, 404)
 

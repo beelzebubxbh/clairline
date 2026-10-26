@@ -68,7 +68,9 @@ export async function savePatrolSwitches(hotEnabled, allEnabled) {
 
 export async function triggerPatrol(mode) {
   const res = await fetch(`/api/patrol/trigger?mode=${encodeURIComponent(mode)}`, {
-    method: 'POST'
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();

@@ -3,8 +3,10 @@
     <!-- 顶部导航栏 -->
     <AppHeader 
       v-model:currentTab="currentTab"
-      :patrol-count="patrolCount"
+      :patrol-state="patrolState"
+      :auth-status="authStatus"
       @open-patrol="patrolModalVisible = true"
+      @open-auth="authModalVisible = true"
     />
 
     <!-- 主体容器 (限制 1280px 居中) -->
@@ -41,7 +43,19 @@
           <!-- 空状态 -->
           <div v-if="displayedRoutes.length === 0" style="text-align:center; padding:48px 20px; background:#fff; border-radius:12px; border:1px solid #e2e8f0;">
             <div style="font-size:1.1rem; font-weight:800; color:var(--text-primary); margin-bottom:6px;">未匹配到符合条件的直飞航线</div>
-            <div style="font-size:0.85rem; color:var(--text-muted);">可尝试关闭“仅看有票航线”或切换出发城市</div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:12px;">可尝试关闭“仅看有票航线”或切换出发城市</div>
+            <button 
+              v-if="!authStatus.is_logged_in" 
+              type="button" 
+              class="btn-primary" 
+              style="padding:6px 16px; display:inline-flex; align-items:center; gap:5px;" 
+              @click="authModalVisible = true"
+            >
+              <span v-html="ICONS.zap" style="display:inline-flex;"></span>
+              <span>立即同步长龙会员登录</span>
+            </button>
+
+
           </div>
         </div>
       </section>
@@ -84,11 +98,22 @@
       @refresh-calendar="handleRefreshCalendar"
     />
 
-    <!-- 巡检航线配置模态框 -->
+    <!-- 航线监控与全网普查模态框 -->
     <PatrolModal 
       :visible="patrolModalVisible"
+      :patrol-state="patrolState"
       @close="patrolModalVisible = false"
-      @saved="(cnt) => { patrolCount = cnt; showToast('巡检配置已成功保存并落库！'); }"
+      @triggered="startPatrolPolling"
+      @saved="() => { showToast('监控配置已成功保存！'); }"
+    />
+
+    <!-- 会员登录同步向导模态框 (网页内嵌入抓包与证书指引) -->
+    <AuthModal 
+      :visible="authModalVisible"
+      :auth-status="authStatus"
+      @close="authModalVisible = false"
+      @synced="handleAuthSynced"
+      @refresh-auth="refreshAuthStatus"
     />
 
     <!-- 悬浮 Toast 轻提示 -->
@@ -106,12 +131,16 @@ import RouteCard from './components/RouteCard.vue';
 import SeatPopover from './components/SeatPopover.vue';
 import RouteDetailDrawer from './components/RouteDetailDrawer.vue';
 import PatrolModal from './components/PatrolModal.vue';
+import AuthModal from './components/AuthModal.vue';
 import FlightMap from './components/FlightMap.vue';
 
 import { fetchAvailableRoutes, queryLiveFlights, refreshRouteCalendar } from './api/flights.js';
-import { fetchPatrolHotRoutes } from './api/patrol.js';
+import { fetchPatrolHotRoutes, fetchPatrolStatus } from './api/patrol.js';
+import { fetchAuthStatus } from './api/auth.js';
 import { DIRECT_MAP } from './data/routes-network.js';
 import { CITY_METADATA } from './data/city-meta.js';
+import { ICONS } from './data/icons.js';
+
 
 // 当前状态
 const currentTab = ref('routes');
@@ -132,6 +161,10 @@ watch(currentTab, (val) => {
 onUnmounted(() => {
   document.body.classList.remove('is-map-tab');
   document.body.classList.remove('is-map-fullscreen');
+  if (patrolPollTimer) {
+    clearInterval(patrolPollTimer);
+    patrolPollTimer = null;
+  }
 });
 
 const origin = ref('杭州');
@@ -144,10 +177,85 @@ const seatCache = ref({});
 const summary = ref({});
 const patrolCount = ref(30);
 
+// 航线监控实时状态
+const patrolState = ref({
+  running: false,
+  mode: 'idle',
+  completed: 0,
+  total: 0,
+  percent: 0,
+  current_route: ''
+});
+let patrolPollTimer = null;
+
+async function checkPatrolStatus() {
+  try {
+    const res = await fetchPatrolStatus();
+    if (res?.state) {
+      const wasRunning = patrolState.value.running;
+      patrolState.value = res.state;
+      if (res.state.running) {
+        if (!patrolPollTimer) {
+          patrolPollTimer = setInterval(checkPatrolStatus, 1200);
+        }
+      } else {
+        if (patrolPollTimer) {
+          clearInterval(patrolPollTimer);
+          patrolPollTimer = null;
+        }
+        if (wasRunning) {
+          showToast('航线监控完成，放票日历已全面更新！');
+          initData();
+        }
+      }
+    }
+  } catch (e) {
+    if (patrolPollTimer) {
+      clearInterval(patrolPollTimer);
+      patrolPollTimer = null;
+    }
+  }
+}
+
+function startPatrolPolling() {
+  checkPatrolStatus();
+  if (!patrolPollTimer) {
+    patrolPollTimer = setInterval(checkPatrolStatus, 1200);
+  }
+}
+
 // 模态框与抽屉
 const drawerVisible = ref(false);
 const selectedRoute = ref({});
 const patrolModalVisible = ref(false);
+const authModalVisible = ref(false);
+
+const authStatus = ref({
+  is_logged_in: false,
+  user_name: '长龙会员',
+  mobile: '',
+  member_level: '普通会员',
+  cert_installed: false,
+  update_time: ''
+});
+
+async function refreshAuthStatus(directData) {
+  if (directData && directData.is_logged_in) {
+    authStatus.value = directData;
+    return;
+  }
+  try {
+    const res = await fetchAuthStatus();
+    if (res && res.ok) {
+      authStatus.value = res;
+    }
+  } catch (e) {}
+}
+
+function handleAuthSynced() {
+  showToast('长龙会员登录成功！已自动存入个人数据库');
+  initData();
+}
 
 // 就地微气泡状态与防抖定时器
 const popover = ref({
@@ -490,7 +598,10 @@ function openDrawer(route) {
 
 onMounted(() => {
   initData();
+  checkPatrolStatus();
+  refreshAuthStatus();
 });
+
 </script>
 
 <style>

@@ -23,9 +23,19 @@ if hasattr(sys.stdout, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception: pass
 
-BACKEND_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    EXE_DIR = Path(sys.executable).resolve().parent
+    BACKEND_DIR = EXE_DIR / "backend"
+    DATA_DIR = BACKEND_DIR / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    BUNDLE_DIR = Path(sys._MEIPASS).resolve()
+    SEED_FILE = BUNDLE_DIR / "backend" / "data" / "routes_seed.json"
+else:
+    BACKEND_DIR = Path(__file__).resolve().parent
+    DATA_DIR = BACKEND_DIR / "data"
+    SEED_FILE = DATA_DIR / "routes_seed.json"
+
 PROJECT_DIR = BACKEND_DIR.parent
-DATA_DIR = BACKEND_DIR / "data"
 DB_PATH = DATA_DIR / "changlong.db"
 
 CITY_IATA_MAP = {
@@ -205,6 +215,40 @@ def init_db():
             )
         """)
 
+        # 9. 会员个人资料与凭据持久化表 (user_profile)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_profile (
+                user_id TEXT PRIMARY KEY DEFAULT 'default',
+                user_name TEXT NOT NULL DEFAULT '长龙会员',
+                mobile TEXT NOT NULL DEFAULT '',
+                member_level TEXT NOT NULL DEFAULT '普通会员',
+                cert_number TEXT NOT NULL DEFAULT '',
+                token TEXT NOT NULL DEFAULT '',
+                cookie TEXT NOT NULL DEFAULT '',
+                card_name TEXT NOT NULL DEFAULT '长龙畅飞卡',
+                encrypted_user_id TEXT NOT NULL DEFAULT '',
+                sec_card_grant_tid TEXT NOT NULL DEFAULT '',
+                coupons_count INTEGER NOT NULL DEFAULT 0,
+                cards_count INTEGER NOT NULL DEFAULT 0,
+                points INTEGER NOT NULL DEFAULT 0,
+                is_verified INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+        """)
+
+        # 热迁移补充字段
+        for col, c_type in [
+            ("coupons_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("cards_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("points", "INTEGER NOT NULL DEFAULT 0"),
+            ("is_verified", "INTEGER NOT NULL DEFAULT 0")
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col} {c_type}")
+            except Exception:
+                pass
+
+
     _seed_initial_data(conn)
     # 自动安全清理：清除所有早于长龙航空提前3天预约起兑日的历史过期日，确保存储与大盘100%纯净
     try:
@@ -266,14 +310,18 @@ def _seed_initial_data(conn: sqlite3.Connection):
     # 3. 种子：航班拓扑基础数据 (flight_routes)
     cur.execute("SELECT COUNT(*) FROM flight_routes")
     if cur.fetchone()[0] == 0:
-        routes_file = DATA_DIR / "flight-routes.json"
+        routes_file = DATA_DIR / "routes_seed.json"
+        if not routes_file.exists():
+            routes_file = SEED_FILE
+        if not routes_file.exists():
+            routes_file = DATA_DIR / "flight-routes.json"
         if routes_file.exists():
             try:
                 raw_routes = json.loads(routes_file.read_text(encoding="utf-8"))
                 for r in raw_routes:
-                    frm = r.get("from") or ""
-                    to = r.get("to") or ""
-                    f_no = r.get("flightNo") or ""
+                    frm = r.get("from_city") or r.get("from") or ""
+                    to = r.get("to_city") or r.get("to") or ""
+                    f_no = r.get("flight_no") or r.get("flightNo") or ""
                     if not frm or not to or not f_no: continue
                     conn.execute("""
                         INSERT OR IGNORE INTO flight_routes 
@@ -281,9 +329,11 @@ def _seed_initial_data(conn: sqlite3.Connection):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         frm, to, CITY_IATA_MAP.get(frm, ""), CITY_IATA_MAP.get(to, ""),
-                        f_no, r.get("depTime", ""), r.get("arrTime", ""), r.get("duration", ""),
-                        r.get("aircraft", ""), r.get("frequency", ""), r.get("stopover", ""), r.get("season", "")
+                        f_no, r.get("dep_time") or r.get("depTime", ""), r.get("arr_time") or r.get("arrTime", ""),
+                        r.get("duration", ""), r.get("aircraft", ""), r.get("frequency", ""),
+                        r.get("stopover", ""), r.get("season", "")
                     ))
+                print(f"[+] 航网排班种子初始化成功：已为新用户自动导入 {len(raw_routes)} 个航线航班！")
             except Exception as e:
                 print(f"⚠️ 航线班次种子初始化提示: {e}")
 
@@ -812,12 +862,62 @@ def get_monitor_history(limit: int = 20) -> list[dict]:
     finally:
         conn.close()
 
-def add_monitor_history(time_str: str, status: str, summary: str):
-    """向数据库追加一条监控历史日志"""
+def save_user_profile(profile: dict, user_id: str = "default") -> None:
+    """持久化保存会员个人信息至 SQLite user_profile 表"""
     conn = get_connection()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with conn:
-            conn.execute("INSERT INTO monitor_history (time, status, summary) VALUES (?, ?, ?)", (time_str, status, summary))
+            conn.execute("""
+                INSERT INTO user_profile 
+                (user_id, user_name, mobile, member_level, cert_number, token, cookie, card_name, encrypted_user_id, sec_card_grant_tid, coupons_count, cards_count, points, is_verified, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    user_name = excluded.user_name,
+                    mobile = excluded.mobile,
+                    member_level = excluded.member_level,
+                    cert_number = excluded.cert_number,
+                    token = excluded.token,
+                    cookie = excluded.cookie,
+                    card_name = excluded.card_name,
+                    encrypted_user_id = excluded.encrypted_user_id,
+                    sec_card_grant_tid = excluded.sec_card_grant_tid,
+                    coupons_count = excluded.coupons_count,
+                    cards_count = excluded.cards_count,
+                    points = excluded.points,
+                    is_verified = excluded.is_verified,
+                    updated_at = excluded.updated_at
+            """, (
+                user_id,
+                profile.get("user_name") or "长龙会员",
+                profile.get("mobile") or "",
+                profile.get("member_level") or "普通会员",
+                profile.get("cert_number") or "",
+                profile.get("token") or "",
+                profile.get("cookie") or "",
+                profile.get("card_name") or "长龙畅飞卡",
+                profile.get("encrypted_user_id") or "",
+                profile.get("sec_card_grant_tid") or "",
+                int(profile.get("coupons_count") or 0),
+                int(profile.get("cards_count") or 0),
+                int(profile.get("points") or 0),
+                int(profile.get("is_verified") or 0),
+                profile.get("updated_at") or now_str
+            ))
+
+    finally:
+        conn.close()
+
+def get_user_profile(user_id: str = "default") -> dict | None:
+    """从 SQLite 读取当前已登录的会员资料"""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM user_profile WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return dict(row)
     finally:
         conn.close()
 

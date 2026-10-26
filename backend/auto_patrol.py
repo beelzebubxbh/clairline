@@ -250,6 +250,7 @@ def run_patrol_cycle(client: SecCardClient, mode: str = "hot"):
     PATROL_STATE["mode"] = mode
     PATROL_STATE["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     PATROL_STATE["completed"] = 0
+    PATROL_STATE["total"] = len(load_hot_routes()) if mode == "hot" else len(load_all_routes())
     PATROL_STATE["percent"] = 0
     PATROL_STATE["success"] = 0
     PATROL_STATE["failed"] = 0
