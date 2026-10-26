@@ -72,7 +72,14 @@ export async function triggerPatrol(mode) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    let errDetail = `请求未成功 (HTTP ${res.status})`;
+    try {
+      const data = await res.json();
+      if (data && data.error) errDetail = data.error;
+    } catch (_) {}
+    throw new Error(errDetail);
+  }
   return await res.json();
 }
 

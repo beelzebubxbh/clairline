@@ -227,7 +227,8 @@ import { startCapture, stopCapture, fetchCaptureStatus, installCert, uninstallCe
 
 const props = defineProps({
   visible: Boolean,
-  authStatus: Object
+  authStatus: Object,
+  autoStart: Boolean
 });
 
 const emit = defineEmits(['close', 'synced', 'refresh-auth']);
@@ -247,6 +248,11 @@ watch(() => props.visible, (val) => {
     captureSuccess.value = false;
     localAuth.value = null;
     emit('refresh-auth');
+    if (props.autoStart && !isCapturing.value) {
+      setTimeout(() => {
+        handleStartCapture();
+      }, 250);
+    }
   } else {
     if (isCapturing.value) {
       handleStopCapture();
@@ -254,34 +260,42 @@ watch(() => props.visible, (val) => {
   }
 });
 
+function notify(title, message, type = 'info') {
+  if (typeof window !== 'undefined' && window.$dialog) {
+    window.$dialog(title, message, type);
+  } else {
+    alert(`${title}: ${message}`);
+  }
+}
+
 async function handleInstallCert() {
   installingCert.value = true;
   try {
     const res = await installCert();
     if (res.ok) {
-      alert('根证书已成功导入系统受信任存储区！');
+      notify('证书安装成功', '根证书已成功导入系统受信任存储区！', 'success');
       emit('refresh-auth');
     } else {
-      alert(`证书导入提示: ${res.error || '未完成'}`);
+      notify('证书导入提示', res.error || '未完成导入，请检查系统权限', 'warning');
     }
   } catch (e) {
-    alert(`操作失败: ${e.message}`);
+    notify('操作失败', e.message || '证书安装异常', 'error');
   } finally {
     installingCert.value = false;
   }
 }
 
 async function handleResetAuth() {
-  if (!confirm('确定清空本地登录凭证与会员信息？将模拟纯净新用户状态。')) return;
+  if (!confirm('确定清空本地登录凭据与会员信息？将模拟纯净新用户状态。')) return;
   try {
     const res = await resetAuth();
     if (res.ok) {
-      alert('已重置为新用户状态！');
+      notify('重置成功', '已彻底清空本地会员凭据，恢复为纯净新用户状态！', 'success');
       emit('refresh-auth');
       emit('synced');
     }
   } catch (e) {
-    alert(`重置失败: ${e.message}`);
+    notify('重置失败', e.message || '重置异常', 'error');
   }
 }
 
@@ -290,11 +304,11 @@ async function handleUninstallCert() {
   try {
     const res = await uninstallCert();
     if (res.ok) {
-      alert('已成功移除根证书！当前状态将变为未信任。');
+      notify('证书移除完成', '已成功移除根证书！当前状态将变为未信任。', 'info');
       emit('refresh-auth');
     }
   } catch (e) {
-    alert(`卸载失败: ${e.message}`);
+    notify('卸载失败', e.message || '卸载异常', 'error');
   }
 }
 
@@ -307,10 +321,10 @@ async function handleStartCapture() {
       captureSuccess.value = false;
       startPolling();
     } else {
-      alert(`启动失败: ${res.error || '未知原因'}`);
+      notify('启动嗅探失败', res.error || '未知原因', 'error');
     }
   } catch (e) {
-    alert(`网络请求异常: ${e.message}`);
+    notify('网络请求异常', e.message || '无法连接本地后台服务', 'error');
   }
 }
 
@@ -339,6 +353,10 @@ function startPolling() {
         setTimeout(() => {
           closeModal();
         }, 1800);
+      } else if (res && res.status === 'error') {
+        stopPolling();
+        isCapturing.value = false;
+        notify('嗅探异常', res.message || '嗅探进程异常退出，详情请查看 logs/ 目录', 'error');
       } else if (res && res.status === 'idle' && isCapturing.value) {
         // 后台由于某种原因退出
         stopPolling();

@@ -37,7 +37,13 @@ def _call_api(method: str, params: dict, headers: dict, timeout: float = 5.0) ->
     body = "paras=" + urllib.parse.quote(json.dumps(payload, ensure_ascii=False))
     
     try:
-        resp = requests.post(LOONGAIR_GATEWAY_URL, headers=req_headers, data=body, timeout=timeout)
+        resp = requests.post(
+            LOONGAIR_GATEWAY_URL,
+            headers=req_headers,
+            data=body,
+            timeout=timeout,
+            proxies={"http": None, "https": None}
+        )
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:

@@ -16,7 +16,14 @@ import time
 import threading
 from pathlib import Path
 
-LOG_PATH = Path.home() / "Desktop" / "clairline_boot.log"
+if getattr(sys, "frozen", False):
+    EXE_DIR = Path(sys.executable).resolve().parent
+else:
+    EXE_DIR = Path(__file__).resolve().parent
+
+LOG_DIR = EXE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_PATH = LOG_DIR / "clairline_boot.log"
 
 class SafeWriter:
     def __init__(self, target_file=None):

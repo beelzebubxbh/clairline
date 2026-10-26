@@ -22,7 +22,46 @@ BACKEND_DIR = Path(__file__).resolve().parent
 DATA_DIR = getattr(db, "DATA_DIR", BACKEND_DIR / "data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CRED_FILE = DATA_DIR / "credentials.json"
-ADDON_PATH = BACKEND_DIR / "capture_addon.py"
+
+def get_addon_path() -> Path:
+    """智能定位 capture_addon.py 脚本路径（兼容源码运行与 PyInstaller 单文件解包环境）"""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        mei = Path(sys._MEIPASS).resolve()
+        candidates.extend([
+            mei / "backend" / "capture_addon.py",
+            mei / "capture_addon.py",
+        ])
+    candidates.extend([
+        Path(__file__).resolve().parent / "capture_addon.py",
+        Path(__file__).resolve().parent / "backend" / "capture_addon.py",
+        Path.cwd() / "backend" / "capture_addon.py",
+        Path.cwd() / "capture_addon.py"
+    ])
+    for p in candidates:
+        if p.is_file():
+            return p.resolve()
+    return candidates[0]
+
+def get_mitm_cmd(addon_path: Path) -> list:
+    """智能查找 mitmdump 可执行文件路径（100% 优先使用安装包自身内置的独立抓包引擎）"""
+    # 1. 单文件解压模式下：100% 强制只使用软件包内置解压的 mitmdump，绝不依赖任何外部/本地开发机路径
+    if getattr(sys, "frozen", False):
+        mei = Path(sys._MEIPASS).resolve()
+        for cand in [mei / "backend" / "mitmdump.exe", mei / "mitmdump.exe"]:
+            if cand.is_file():
+                return [str(cand.resolve()), "--listen-port", "8080", "-s", str(addon_path)]
+
+    # 2. 源码开发模式：优先检查系统 PATH
+    import shutil
+    w = shutil.which("mitmdump")
+    if w:
+        return [w, "--listen-port", "8080", "-s", str(addon_path)]
+
+    # 3. 源码回退
+    return [sys.executable, "-m", "mitmproxy.tools.dump", "--listen-port", "8080", "-s", str(addon_path)]
+
+ADDON_PATH = get_addon_path()
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -36,11 +75,26 @@ def mask_id(c: str) -> str:
     if not c or len(c) < 8: return c or ""
     return f"{c[:6]}********{c[-4:]}"
 
+def get_bundled_cert_path() -> Path | None:
+    """获取随软件打包内置的 CA 根证书路径（保障新用户无任何旧环境时直接可用）"""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        mei = Path(sys._MEIPASS).resolve()
+        candidates.extend([
+            mei / "backend" / "mitmproxy-ca-cert.cer",
+            mei / "mitmproxy-ca-cert.cer",
+        ])
+    candidates.extend([
+        Path(__file__).resolve().parent / "mitmproxy-ca-cert.cer",
+        Path.cwd() / "backend" / "mitmproxy-ca-cert.cer"
+    ])
+    for p in candidates:
+        if p.is_file():
+            return p.resolve()
+    return None
+
 def check_cert_installed() -> bool:
     """检查 mitmproxy CA 根证书是否已在 Windows 用户受信任根证书库中"""
-    cert_path = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.cer"
-    if not cert_path.exists():
-        return False
     try:
         res = subprocess.run(
             'certutil -verifystore -user Root "mitmproxy"',
@@ -51,13 +105,28 @@ def check_cert_installed() -> bool:
         )
         return res.returncode == 0 or "mitmproxy" in res.stdout
     except Exception:
+        cert_path = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.cer"
         return cert_path.exists()
 
 def install_root_cert() -> dict:
-    """调用系统 certutil 一键导入根证书至 CurrentUser\\Root"""
-    cert_path = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.cer"
+    """调用系统 certutil 一键导入根证书至 CurrentUser\\Root（对纯新用户自动采用内置证书并落盘）"""
+    target_dir = Path.home() / ".mitmproxy"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    cert_path = target_dir / "mitmproxy-ca-cert.cer"
+
+    # 如果纯新用户系统 ~/.mitmproxy/ 下尚未生成证书，自动从打包内置的证书中释放并写入
     if not cert_path.exists():
-        return {"ok": False, "error": "未在 ~/.mitmproxy/ 检测到证书文件，请先点击启动一次嗅探"}
+        bundled = get_bundled_cert_path()
+        if bundled and bundled.is_file():
+            try:
+                import shutil
+                shutil.copy2(str(bundled), str(cert_path))
+            except Exception:
+                pass
+
+    if not cert_path.exists():
+        return {"ok": False, "error": "未检测到根证书文件，请先点击启动一次嗅探"}
+
     try:
         res = subprocess.run(
             f'certutil -addstore -user Root "{cert_path}"',
@@ -87,13 +156,13 @@ def uninstall_root_cert() -> dict:
         return {"ok": False, "error": str(e)}
 
 def reset_user_auth() -> dict:
-    """一键重置当前登录凭据（清空 credentials.json 与 SQLite 中的 user_profile），模拟纯净新用户"""
+    """一键重置当前登录凭据（清空 SQLite 中的 user_profile），模拟纯净新用户"""
     try:
         if CRED_FILE.exists():
             try:
-                CRED_FILE.unlink()
+                CRED_FILE.unlink(missing_ok=True)
             except Exception:
-                CRED_FILE.write_text("{}", encoding="utf-8")
+                pass
         db.save_user_profile({
             "user_name": "长龙会员",
             "mobile": "",
@@ -104,6 +173,8 @@ def reset_user_auth() -> dict:
             "card_name": "长龙畅飞卡",
             "encrypted_user_id": "",
             "sec_card_grant_tid": "",
+            "headers": {},
+            "template": {},
             "updated_at": ""
         })
         return {"ok": True, "message": "会员登录态与本地个人凭据已彻底清空重置！"}
@@ -120,14 +191,13 @@ class CaptureManager:
         self.lock = threading.Lock()
 
     def get_auth_status(self) -> dict:
-        """检查数据库与 credentials.json 中是否具备有效会员凭证"""
+        """检查 SQLite 数据库中是否具备有效会员凭据（单一真实数据源）"""
         profile = db.get_user_profile() or {}
         is_logged_in = bool(profile.get("token"))
         update_time = profile.get("updated_at", "")
         auth = profile.get("token", "")
 
-        # 核心机制：每天北京时间 00:00 自动将凭证标记为过期清空
-        # 原因：微信小程序会话 Token 具有自然日生命周期，跨越 0 点后失效
+        # 核心机制：每天北京时间 00:00 自动将凭据标记为过期清空
         today_date = datetime.now().strftime("%Y-%m-%d")
         if update_time and update_time[:10] != today_date:
             print(f"[*] 提示：检测到长龙凭证更新日期为 {update_time[:10]}，已跨越北京时间 00:00 自然日周期（微信登录态已失效），自动清空过期凭据。")
@@ -137,7 +207,7 @@ class CaptureManager:
             update_time = ""
             auth = ""
 
-        # 如果 SQLite 库中尚未记录，则从 credentials.json 补充并同步进 SQLite
+        # 兼容旧版本过渡：若 SQLite 为空但本地有旧的 credentials.json，做最后一次单向导入后立即删除 json 文件
         if not is_logged_in and CRED_FILE.exists():
             try:
                 with open(CRED_FILE, "r", encoding="utf-8") as f:
@@ -161,10 +231,14 @@ class CaptureManager:
                                 "card_name": prof.get("card_name") or "长龙畅飞卡",
                                 "encrypted_user_id": prof.get("encrypted_user_id") or tpl.get("encryptedUserId", ""),
                                 "sec_card_grant_tid": prof.get("sec_card_grant_tid") or tpl.get("secCardGrantTid", ""),
+                                "headers": headers,
+                                "template": tpl,
                                 "is_verified": prof.get("is_verified", 0),
                                 "updated_at": update_time
                             }
                             db.save_user_profile(profile)
+                # 迁移完毕，立即删除 credentials.json
+                CRED_FILE.unlink(missing_ok=True)
             except Exception:
                 pass
 
@@ -196,38 +270,59 @@ class CaptureManager:
                     "message": "嗅探服务已在后台运行中，请打开微信小程序【我的】"
                 }
 
-            # 寻找 mitmdump 可执行文件或 Python 模块
-            import shutil
-            mitm_cmd = None
-            if shutil.which("mitmdump"):
-                mitm_cmd = ["mitmdump", "--listen-port", "8080", "-s", str(ADDON_PATH)]
-            elif Path(r"D:\bin\mitmdump.exe").exists():
-                mitm_cmd = [r"D:\bin\mitmdump.exe", "--listen-port", "8080", "-s", str(ADDON_PATH)]
-            else:
-                # 回退：直接使用当前 Python 虚拟环境内置的 mitmproxy 模块运行
-                mitm_cmd = [sys.executable, "-m", "mitmproxy.tools.dump", "--listen-port", "8080", "-s", str(ADDON_PATH)]
-
-            # 启动前杀除可能残留的旧 mitm 进程
+            # 启动前强力杀除可能残留的旧 mitm 进程，确保 8080 端口彻底空闲可用
             try:
-                subprocess.run(
-                    'powershell -NoProfile -Command "Get-Process mitmweb, mitmdump -ErrorAction SilentlyContinue | Stop-Process -Force"',
-                    shell=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
+                subprocess.run("taskkill /F /IM mitmdump.exe /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run("taskkill /F /IM mitmweb.exe /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(0.3)
             except Exception:
                 pass
+
+            # 寻找插件脚本与 mitmdump 可执行文件
+            addon_path = get_addon_path()
+            if not addon_path.is_file():
+                self.status = "error"
+                self.message = f"未找到抓包插件脚本: {addon_path}"
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error": self.message
+                }
+
+            mitm_cmd = get_mitm_cmd(addon_path)
+            print(f"[*] 启动嗅探指令: {' '.join(mitm_cmd)}")
 
             # Windows 下通过 CREATE_NO_WINDOW 实现彻底无黑框无弹窗静默运行
             creationflags = 0x08000000 if sys.platform == "win32" else 0
 
+            if getattr(sys, "frozen", False):
+                exe_dir = Path(sys.executable).resolve().parent
+            else:
+                exe_dir = Path(__file__).resolve().parent.parent
+            log_dir = exe_dir / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            mitm_log = log_dir / "clairline_mitm.log"
+
             try:
+                log_fp = open(mitm_log, "w", encoding="utf-8", errors="replace")
+                env = os.environ.copy()
+                env["CLAIRLINE_DATA_DIR"] = str(DATA_DIR.resolve())
+                env["CLAIRLINE_DB_PATH"] = str(getattr(db, "DB_PATH", DATA_DIR / "changlong.db").resolve())
+
                 self.process = subprocess.Popen(
                     mitm_cmd,
                     creationflags=creationflags,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                    stdout=log_fp,
+                    stderr=log_fp,
+                    env=env
                 )
+
+                # 显式激活 Windows 系统代理为开启状态 (127.0.0.1:8080)
+                try:
+                    from proxy_util import set_system_proxy
+                    set_system_proxy(True, "127.0.0.1:8080")
+                except Exception as ex:
+                    print(f"[!] 开启系统代理提示: {ex}")
 
                 self.status = "capturing"
                 self.message = "嗅探服务已启动！Windows 代理已自动开启 (127.0.0.1:8080)，请在微信中打开长龙航空小程序【我的】"
@@ -243,6 +338,11 @@ class CaptureManager:
             except Exception as e:
                 self.status = "error"
                 self.message = f"启动嗅探器失败: {e}"
+                try:
+                    from proxy_util import set_system_proxy
+                    set_system_proxy(False)
+                except Exception:
+                    pass
                 return {
                     "ok": False,
                     "status": "error",
@@ -285,63 +385,46 @@ class CaptureManager:
         if not proc:
             return
 
-        # 等待 mitmdump 正常捕获退出（capture_addon 捕获后会执行 ctx.master.shutdown）
-        proc.wait()
+        ret = proc.wait()
 
         with self.lock:
-            # 校验 credentials.json 是否已成功落盘
-            if CRED_FILE.exists():
+            # 校验 SQLite 数据库中是否已成功持久化捕获的会员凭据
+            prof = db.get_user_profile() or {}
+            auth = prof.get("token") or ""
+            update_time = prof.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if auth and len(auth) > 15:
+                self.status = "success"
+                self.last_capture_time = update_time
+                user_name = prof.get("user_name", "长龙会员")
+                self.message = f"成功捕获会员凭据！(会员: {user_name}, 捕获时间: {update_time})"
+
+                # 清理任何磁盘残留的旧 credentials.json，防止多头存储困惑
+                if CRED_FILE.exists():
+                    try:
+                        CRED_FILE.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+                # 热重载本地 client
                 try:
-                    with open(CRED_FILE, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        headers = data.get("headers", {})
-                        auth = headers.get("authorization") or headers.get("Authorization") or ""
-                        tpl = data.get("template", {})
-                        update_time = data.get("update_time", "")
-                        if auth and len(auth) > 15:
-                            self.status = "success"
-                            self.last_capture_time = update_time
-                            self.message = f"成功捕获会员凭据！(捕获时间: {update_time})"
+                    from seccard_client import SecCardClient
+                    SecCardClient().check_and_reload()
+                except Exception as e:
+                    print(f"⚠️ 热重载 SecCardClient 异常: {e}")
+            else:
+                self.status = "error"
+                self.message = "未捕获到有效授权 Token，请确认在微信小程序中打开了【我的】页面"
 
-                            prof = data.get("profile", {})
-                            if not prof.get("user_name") or prof.get("user_name") == "长龙会员":
-                                try:
-                                    from loongair_client import fetch_full_user_profile
-                                    fetched = fetch_full_user_profile(headers)
-                                    prof.update(fetched)
-                                except Exception:
-                                    pass
+            self.process = None
+            self._restore_system_proxy()
+            return
 
-                            # 持久化同步存入 SQLite user_profile 表
-                            profile = {
-                                "user_name": prof.get("user_name") or "长龙会员",
-                                "mobile": prof.get("mobile") or tpl.get("mobile", ""),
-                                "member_level": prof.get("member_level") or "乘云会员",
-                                "cert_number": prof.get("cert_number") or tpl.get("certNumber", ""),
-                                "token": auth,
-                                "cookie": headers.get("cookie", ""),
-                                "card_name": prof.get("card_name") or "长龙畅飞卡",
-                                "encrypted_user_id": prof.get("encrypted_user_id") or tpl.get("encryptedUserId", ""),
-                                "sec_card_grant_tid": prof.get("sec_card_grant_tid") or tpl.get("secCardGrantTid", ""),
-                                "is_verified": prof.get("is_verified", 0),
-                                "updated_at": update_time
-                            }
-                            db.save_user_profile(profile)
-
-                            # 热重载本地 client
-                            try:
-                                from seccard_client import SecCardClient
-                                SecCardClient().check_and_reload()
-                            except Exception:
-                                pass
-
-                            self.process = None
-                            self._restore_system_proxy()
-                            return
-                except Exception:
-                    pass
-
-            if self.status == "capturing":
+        if self.status == "capturing":
+            if ret != 0:
+                self.status = "error"
+                self.message = f"嗅探服务异常退出 (退出码 {ret})，详情请查看 logs/clairline_mitm.log"
+            else:
                 self.status = "idle"
                 self.message = "嗅探服务已退出"
 

@@ -18,34 +18,38 @@ from loongair_client import fetch_full_user_profile
 CRED_FILE = BACKEND_DIR / "data" / "credentials.json"
 
 def sync_current_user_profile() -> dict:
-    if not CRED_FILE.exists():
-        return {"ok": False, "error": "未检测到 credentials.json，请先通过微信小程序嗅探凭据"}
+    prof = db.get_user_profile() or {}
+    token = prof.get("token") or ""
+    headers = prof.get("headers") or {}
     
-    try:
-        with open(CRED_FILE, "r", encoding="utf-8") as f:
-            c = f.read().strip()
-            cred = json.loads(c) if c else {}
-    except Exception as e:
-        return {"ok": False, "error": f"读取凭据文件失败: {e}"}
-        
-    headers = cred.get("headers", {})
-    token = headers.get("authorization") or headers.get("Authorization") or ""
-    if not token:
-        return {"ok": False, "error": "凭据文件中缺少有效的 Authorization"}
+    if not token and not headers:
+        return {"ok": False, "error": "当前未登录或数据库中缺少凭据，请先在客户端完成微信小程序嗅探登录"}
+    
+    if not headers and token:
+        headers = {
+            "Authorization": token,
+            "Cookie": prof.get("cookie") or f"SESSION={token}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MicroMessenger/7.0.20",
+            "xweb_xhr": "1"
+        }
         
     print(f"[*] 正在主动向长龙官方服务器查询会员全量档案 (Token: {token[:12]}...)...")
-    prof = fetch_full_user_profile(headers)
-    print(f"[+] 成功获取长龙会员档案: {prof.get('user_name')} | 等级: {prof.get('member_level')} | 实名: {prof.get('is_verified')}")
-    
-    # 回写 credentials.json
-    cred["profile"] = prof
     try:
-        with open(CRED_FILE, "w", encoding="utf-8") as f:
-            json.dump(cred, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+        remote_prof = fetch_full_user_profile(headers)
+    except Exception as e:
+        return {"ok": False, "error": f"请求长龙官方接口失败: {e}"}
         
-    # 保存进 SQLite
+    user_name = remote_prof.get('user_name') or prof.get('user_name') or "长龙会员"
+    print(f"[+] 成功获取长龙会员档案: {user_name} | 等级: {remote_prof.get('member_level')} | 实名: {remote_prof.get('is_verified')}")
+    
+    # 彻底持久化存入 SQLite user_profile 表，废弃 credentials.json
+    prof.update(remote_prof)
+    prof["token"] = token
+    prof["headers"] = headers
+    try:
+        db.save_user_profile(prof)
+    except Exception as e:
+        print(f"⚠️ 保存至 SQLite 失败: {e}")
     prof_db = {
         "user_name": prof.get("user_name") or "长龙会员",
         "mobile": prof.get("mobile") or "",

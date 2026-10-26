@@ -23,20 +23,45 @@ if hasattr(sys.stdout, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception: pass
 
-if getattr(sys, "frozen", False):
-    EXE_DIR = Path(sys.executable).resolve().parent
+import os
+
+ENV_DB_PATH = os.environ.get("CLAIRLINE_DB_PATH")
+ENV_DATA_DIR = os.environ.get("CLAIRLINE_DATA_DIR")
+
+if ENV_DB_PATH:
+    DB_PATH = Path(ENV_DB_PATH).resolve()
+    DATA_DIR = DB_PATH.parent
+    BACKEND_DIR = DATA_DIR.parent
+    PROJECT_DIR = BACKEND_DIR.parent
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SEED_FILE = DATA_DIR / "routes_seed.json"
+elif ENV_DATA_DIR:
+    DATA_DIR = Path(ENV_DATA_DIR).resolve()
+    DB_PATH = DATA_DIR / "changlong.db"
+    BACKEND_DIR = DATA_DIR.parent
+    PROJECT_DIR = BACKEND_DIR.parent
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SEED_FILE = DATA_DIR / "routes_seed.json"
+elif getattr(sys, "frozen", False):
+    exe_path = Path(sys.executable).resolve()
+    # 针对 PyInstaller 解压出的子进程（如 mitmdump.exe 位于 _MEIxxx 临时目录）
+    if "_MEI" in str(exe_path):
+        EXE_DIR = Path.cwd().resolve()
+    else:
+        EXE_DIR = exe_path.parent
     BACKEND_DIR = EXE_DIR / "backend"
     DATA_DIR = BACKEND_DIR / "data"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    BUNDLE_DIR = Path(sys._MEIPASS).resolve()
+    BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", exe_path.parent)).resolve()
     SEED_FILE = BUNDLE_DIR / "backend" / "data" / "routes_seed.json"
+    PROJECT_DIR = BACKEND_DIR.parent
+    DB_PATH = DATA_DIR / "changlong.db"
 else:
     BACKEND_DIR = Path(__file__).resolve().parent
     DATA_DIR = BACKEND_DIR / "data"
     SEED_FILE = DATA_DIR / "routes_seed.json"
-
-PROJECT_DIR = BACKEND_DIR.parent
-DB_PATH = DATA_DIR / "changlong.db"
+    PROJECT_DIR = BACKEND_DIR.parent
+    DB_PATH = DATA_DIR / "changlong.db"
 
 CITY_IATA_MAP = {
     '阿勒泰':'AAT','阿拉尔':'ACF','阿克苏':'AKU','巴中':'BZX','广州':'CAN','郑州':'CGO',
@@ -232,6 +257,8 @@ def init_db():
                 cards_count INTEGER NOT NULL DEFAULT 0,
                 points INTEGER NOT NULL DEFAULT 0,
                 is_verified INTEGER NOT NULL DEFAULT 0,
+                headers_json TEXT NOT NULL DEFAULT '{}',
+                template_json TEXT NOT NULL DEFAULT '{}',
                 updated_at TEXT NOT NULL DEFAULT ''
             )
         """)
@@ -241,7 +268,9 @@ def init_db():
             ("coupons_count", "INTEGER NOT NULL DEFAULT 0"),
             ("cards_count", "INTEGER NOT NULL DEFAULT 0"),
             ("points", "INTEGER NOT NULL DEFAULT 0"),
-            ("is_verified", "INTEGER NOT NULL DEFAULT 0")
+            ("is_verified", "INTEGER NOT NULL DEFAULT 0"),
+            ("headers_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("template_json", "TEXT NOT NULL DEFAULT '{}'")
         ]:
             try:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col} {c_type}")
@@ -866,12 +895,24 @@ def save_user_profile(profile: dict, user_id: str = "default") -> None:
     """持久化保存会员个人信息至 SQLite user_profile 表"""
     conn = get_connection()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    headers_val = profile.get("headers")
+    if isinstance(headers_val, dict):
+        headers_json = json.dumps(headers_val, ensure_ascii=False)
+    else:
+        headers_json = str(headers_val or profile.get("headers_json") or "{}")
+
+    template_val = profile.get("template") or profile.get("search_template")
+    if isinstance(template_val, dict):
+        template_json = json.dumps(template_val, ensure_ascii=False)
+    else:
+        template_json = str(template_val or profile.get("template_json") or "{}")
+
     try:
         with conn:
             conn.execute("""
                 INSERT INTO user_profile 
-                (user_id, user_name, mobile, member_level, cert_number, token, cookie, card_name, encrypted_user_id, sec_card_grant_tid, coupons_count, cards_count, points, is_verified, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (user_id, user_name, mobile, member_level, cert_number, token, cookie, card_name, encrypted_user_id, sec_card_grant_tid, coupons_count, cards_count, points, is_verified, headers_json, template_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     user_name = excluded.user_name,
                     mobile = excluded.mobile,
@@ -886,6 +927,8 @@ def save_user_profile(profile: dict, user_id: str = "default") -> None:
                     cards_count = excluded.cards_count,
                     points = excluded.points,
                     is_verified = excluded.is_verified,
+                    headers_json = excluded.headers_json,
+                    template_json = excluded.template_json,
                     updated_at = excluded.updated_at
             """, (
                 user_id,
@@ -902,6 +945,8 @@ def save_user_profile(profile: dict, user_id: str = "default") -> None:
                 int(profile.get("cards_count") or 0),
                 int(profile.get("points") or 0),
                 int(profile.get("is_verified") or 0),
+                headers_json,
+                template_json,
                 profile.get("updated_at") or now_str
             ))
 
@@ -917,7 +962,16 @@ def get_user_profile(user_id: str = "default") -> dict | None:
         row = cur.fetchone()
         if not row:
             return None
-        return dict(row)
+        d = dict(row)
+        try:
+            d["headers"] = json.loads(d.get("headers_json") or "{}")
+        except Exception:
+            d["headers"] = {}
+        try:
+            d["template"] = json.loads(d.get("template_json") or "{}")
+        except Exception:
+            d["template"] = {}
+        return d
     finally:
         conn.close()
 

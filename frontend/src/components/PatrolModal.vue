@@ -354,10 +354,38 @@ async function onSwitchChange(key, checked) {
 
 async function triggerManual(mode) {
   try {
-    await triggerPatrol(mode);
-    emit('triggered');
+    const res = await triggerPatrol(mode);
+    if (res && res.ok) {
+      emit('triggered');
+    } else {
+      const err = res?.error || '';
+      if (err.includes('过期') || err.includes('100001') || err.includes('未登录') || err.includes('失效') || err.includes('授权') || err.includes('400')) {
+        emit('close');
+        if (typeof window !== 'undefined' && window.$openAuthModal) {
+          window.$openAuthModal(true);
+        }
+        return;
+      }
+      if (typeof window !== 'undefined' && window.$dialog) {
+        window.$dialog('触发普查提示', err || '未能成功触发巡检普查', 'warning');
+      } else {
+        alert(err || '未能成功触发巡检普查');
+      }
+    }
   } catch (e) {
-    alert(e.message || '触发失败');
+    const msg = e.message || '';
+    if (msg.includes('过期') || msg.includes('100001') || msg.includes('未登录') || msg.includes('失效') || msg.includes('授权') || msg.includes('400')) {
+      emit('close');
+      if (typeof window !== 'undefined' && window.$openAuthModal) {
+        window.$openAuthModal(true);
+      }
+      return;
+    }
+    if (typeof window !== 'undefined' && window.$dialog) {
+      window.$dialog('操作失败', msg || '网络请求异常', 'error');
+    } else {
+      alert(msg || '触发失败');
+    }
   }
 }
 
@@ -383,7 +411,11 @@ async function saveAll() {
     emit('saved', routes.value.length);
     emit('close');
   } catch (e) {
-    alert('保存失败，请检查服务状态');
+    if (typeof window !== 'undefined' && window.$dialog) {
+      window.$dialog('保存失败', '请检查后台服务连接状态', 'error');
+    } else {
+      alert('保存失败，请检查服务状态');
+    }
   }
 }
 

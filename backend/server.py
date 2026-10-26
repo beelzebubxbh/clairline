@@ -566,20 +566,30 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                 }, 400)
                 return
 
-            # 启动前健康探针：同步检测微信登录态是否依然存活，过期则直接拦截报错
+            # 启动前健康探针：同步检测微信登录态是否依然存活
             try:
                 client.check_and_reload()
+                if not client.template.get("secCardGrantTid"):
+                    prof = db.get_user_profile() or {}
+                    if prof.get("sec_card_grant_tid"):
+                        client.template["secCardGrantTid"] = prof["sec_card_grant_tid"]
                 client.get_calendar("杭州", "深圳")
             except Exception as auth_err:
                 err_text = str(auth_err)
                 if "100001" in err_text or "403" in err_text or "未登录" in err_text:
                     self.send_json({
                         "ok": False,
-                        "error": "长龙微信小程序登录态已过期 (100001)！请在手机微信中重新点开长龙畅飞卡查一次票，导出新 cl.saz 覆盖即可！"
+                        "error": "长龙微信小程序登录态已失效，请点击右上角重新同步一次长龙会员登录态！"
+                    }, 400)
+                    return
+                elif "scgtid" in err_text.lower() or not client.template.get("secCardGrantTid"):
+                    self.send_json({
+                        "ok": False,
+                        "error": "已获取会员身份，但尚未锁定畅飞卡卡包授权！请在微信小程序中点开一次【长龙畅飞卡】主页即可完成绑定。"
                     }, 400)
                     return
                 else:
-                    self.send_json({"ok": False, "error": f"长龙接口网络异常: {err_text}"}, 500)
+                    self.send_json({"ok": False, "error": f"长龙接口提示: {err_text}"}, 400)
                     return
 
             def patrol_worker():

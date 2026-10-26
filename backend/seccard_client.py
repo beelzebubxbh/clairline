@@ -103,7 +103,45 @@ class SecCardClient:
         return None
 
     def check_and_reload(self, force: bool = False):
-        """文件修改热检测：一旦检测到 credentials.json 或 cl.saz 产生新改动，自动秒级重新解析加载最新凭据"""
+        """优先从 SQLite 数据库直接载入会员凭证与畅飞卡模板，秒级响应，彻底摆脱 json 文件依赖"""
+        try:
+            import db
+            prof = db.get_user_profile()
+            if prof and prof.get("token"):
+                up_time = prof.get("updated_at", "")
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                if not (up_time and up_time[:10] != today_str):
+                    headers = prof.get("headers") or {}
+                    if not headers:
+                        headers = {
+                            "Authorization": prof["token"],
+                            "Cookie": prof.get("cookie") or f"SESSION={prof['token']}",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MicroMessenger/7.0.20",
+                            "xweb_xhr": "1"
+                        }
+                    keep = ("Authorization", "NESign", "Cookie", "X-App-Version", "User-Agent", "Referer", "xweb_xhr", "Accept", "Accept-Encoding", "Accept-Language")
+                    lower_map = {k.lower(): v for k, v in headers.items()}
+                    self.headers = {}
+                    for k in keep:
+                        if k in headers:
+                            self.headers[k] = headers[k]
+                        elif k.lower() in lower_map:
+                            self.headers[k] = lower_map[k.lower()]
+
+                    template = prof.get("template") or {}
+                    if prof.get("sec_card_grant_tid"):
+                        template["secCardGrantTid"] = prof["sec_card_grant_tid"]
+                    if prof.get("encrypted_user_id"):
+                        template["encryptedUserId"] = prof["encrypted_user_id"]
+                    if prof.get("cert_number"):
+                        template["certNumber"] = prof["cert_number"]
+                    if prof.get("mobile"):
+                        template["mobile"] = prof["mobile"]
+                    self.template = template
+                    return
+        except Exception:
+            pass
+
         source = self.detect_credentials_source()
         if not source:
             return
@@ -146,8 +184,26 @@ class SecCardClient:
                     elif k.lower() in lower_map:
                         self.headers[k] = lower_map[k.lower()]
                 
+                prof = data.get("profile", {})
+                if not prof:
+                    try:
+                        import db
+                        prof = db.get_user_profile() or {}
+                    except Exception:
+                        prof = {}
+
+                # 核心机制：自动从会员档案中绑定 secCardGrantTid 与身份字段
+                for k_param, k_prof in [
+                    ("secCardGrantTid", "sec_card_grant_tid"),
+                    ("encryptedUserId", "encrypted_user_id"),
+                    ("certNumber", "cert_number"),
+                    ("mobile", "mobile")
+                ]:
+                    if not params.get(k_param) and prof.get(k_prof):
+                        params[k_param] = prof[k_prof]
+
                 # 若缺少 encryptedUserId（如仅浏览了日历），从历史 saz 模板继承永久身份字段
-                if not params.get("encryptedUserId"):
+                if not params.get("encryptedUserId") or not params.get("secCardGrantTid"):
                     saz_cand = self.detect_saz_path()
                     if saz_cand and saz_cand.exists():
                         try:

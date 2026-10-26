@@ -7,7 +7,7 @@
       :auth-status="authStatus"
       :update-info="updateInfo"
       @open-patrol="patrolModalVisible = true"
-      @open-auth="authModalVisible = true"
+      @open-auth="openAuthModal(false)"
       @open-update="openUpdateModal"
     />
 
@@ -51,7 +51,7 @@
               type="button" 
               class="btn-primary" 
               style="padding:6px 16px; display:inline-flex; align-items:center; gap:5px;" 
-              @click="authModalVisible = true"
+              @click="openAuthModal(true)"
             >
               <span v-html="ICONS.zap" style="display:inline-flex;"></span>
               <span>立即同步长龙会员登录</span>
@@ -113,6 +113,7 @@
     <AuthModal 
       :visible="authModalVisible"
       :auth-status="authStatus"
+      :auto-start="autoStartCaptureOnOpen"
       @close="authModalVisible = false"
       @synced="handleAuthSynced"
       @refresh-auth="refreshAuthStatus"
@@ -124,6 +125,24 @@
       :update-info="updateInfo"
       @close="updateModalVisible = false"
       @ignore-version="handleIgnoreVersion"
+    />
+
+    <!-- 全网探测普查全屏进度条模态框 -->
+    <FullPatrolProgress 
+      :visible="fullPatrolVisible"
+      :patrol-state="patrolState"
+      @close="fullPatrolVisible = false"
+      @cancel="fullPatrolVisible = false"
+    />
+
+    <!-- 全局现代高质感 EXE 模态对话框 (替换丑陋的浏览器原生 alert) -->
+    <AppDialog 
+      :visible="appDialog.visible"
+      :title="appDialog.title"
+      :message="appDialog.message"
+      :type="appDialog.type"
+      :confirm-text="appDialog.confirmText"
+      @close="appDialog.visible = false"
     />
 
     <!-- 悬浮 Toast 轻提示 -->
@@ -144,9 +163,11 @@ import PatrolModal from './components/PatrolModal.vue';
 import AuthModal from './components/AuthModal.vue';
 import UpdateModal from './components/UpdateModal.vue';
 import FlightMap from './components/FlightMap.vue';
+import AppDialog from './components/AppDialog.vue';
+import FullPatrolProgress from './components/FullPatrolProgress.vue';
 
 import { fetchAvailableRoutes, queryLiveFlights, refreshRouteCalendar } from './api/flights.js';
-import { fetchPatrolHotRoutes, fetchPatrolStatus } from './api/patrol.js';
+import { fetchPatrolHotRoutes, fetchPatrolStatus, triggerPatrol } from './api/patrol.js';
 import { fetchAuthStatus } from './api/auth.js';
 import { checkSystemUpdate } from './api/system.js';
 import { DIRECT_MAP } from './data/routes-network.js';
@@ -198,6 +219,33 @@ const patrolState = ref({
   percent: 0,
   current_route: ''
 });
+// 全网普查动态全屏进度条模态框
+const fullPatrolVisible = ref(false);
+
+// 全局现代高质感 EXE 模态对话框
+const appDialog = ref({
+  visible: false,
+  title: '系统提示',
+  message: '',
+  type: 'info',
+  confirmText: '确定'
+});
+
+function showAppDialog(title, message, type = 'info', confirmText = '知道了') {
+  appDialog.value = {
+    visible: true,
+    title,
+    message,
+    type,
+    confirmText
+  };
+}
+
+// 挂载到全局 window，供 AuthModal / PatrolModal 随时调起原生质感弹窗
+if (typeof window !== 'undefined') {
+  window.$dialog = showAppDialog;
+}
+
 let patrolPollTimer = null;
 
 async function checkPatrolStatus() {
@@ -216,7 +264,12 @@ async function checkPatrolStatus() {
           patrolPollTimer = null;
         }
         if (wasRunning) {
-          showToast('航线监控完成，放票日历已全面更新！');
+          if (fullPatrolVisible.value) {
+            fullPatrolVisible.value = false;
+            showAppDialog('全网普查完成', '已完成全网航线机位探测普查，放票大盘已全面就绪！', 'success');
+          } else {
+            showToast('航线监控完成，放票日历已全面更新！');
+          }
           initData();
         }
       }
@@ -241,7 +294,17 @@ const drawerVisible = ref(false);
 const selectedRoute = ref({});
 const patrolModalVisible = ref(false);
 const authModalVisible = ref(false);
+const autoStartCaptureOnOpen = ref(false);
 const updateModalVisible = ref(false);
+
+function openAuthModal(autoStart = false) {
+  autoStartCaptureOnOpen.value = autoStart;
+  authModalVisible.value = true;
+}
+
+if (typeof window !== 'undefined') {
+  window.$openAuthModal = openAuthModal;
+}
 
 const updateInfo = ref({
   has_update: false,
@@ -328,13 +391,26 @@ async function refreshAuthStatus(directData) {
   } catch (e) {}
 }
 
-function handleAuthSynced() {
+async function handleAuthSynced() {
   showToast('长龙会员登录成功！已自动存入个人数据库');
   refreshAuthStatus();
   // 消除长龙官方接口 0.5 秒异步网络时序差：延迟 800ms 与 1800ms 静默刷新，100% 自动显示真实姓名
   setTimeout(refreshAuthStatus, 800);
   setTimeout(refreshAuthStatus, 1800);
   initData();
+
+  // 核心自动化流水线：登录成功后，全自动触发全网 397 条航线普查，并弹出全屏高美感发光雷达进度条
+  try {
+    const res = await triggerPatrol('all');
+    if (res && res.ok) {
+      fullPatrolVisible.value = true;
+      startPatrolPolling();
+    } else {
+      showAppDialog('普查提示', res?.error || '未能自动启动全网普查，您可以随时在右上角点击普查', 'warning');
+    }
+  } catch (err) {
+    showAppDialog('网络异常', '自动启动全网普查请求异常: ' + (err.message || '网络连接失败'), 'error');
+  }
 }
 
 // 就地微气泡状态与防抖定时器
@@ -662,10 +738,20 @@ async function handleRefreshCalendar({ from, to, done }) {
       }
       showToast(`【${from} ➔ ${to}】日历已更新！共 ${res.availableDates.length} 天有票`);
     } else {
-      showToast(`刷新提示: ${res.error || '暂无新增'}`);
+      const err = res.error || '';
+      if (err.includes('过期') || err.includes('100001') || err.includes('未登录') || err.includes('失效') || err.includes('400')) {
+        openAuthModal(true);
+        return;
+      }
+      showToast(`刷新提示: ${err || '暂无新增'}`);
     }
   } catch (e) {
-    showToast(`刷新提示: ${e.message || '网络请求异常'}`);
+    const msg = e.message || '';
+    if (msg.includes('过期') || msg.includes('100001') || msg.includes('未登录') || msg.includes('失效') || msg.includes('400')) {
+      openAuthModal(true);
+      return;
+    }
+    showToast(`刷新提示: ${msg || '网络请求异常'}`);
   } finally {
     done();
   }
