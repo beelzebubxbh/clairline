@@ -291,9 +291,9 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             # 用户新需求：支持单条航线点击即刻向长龙官方刷新最新可兑日历
             if force_refresh:
                 if not client.headers:
-                    client.load_credentials()
+                    client.check_and_reload()
                 if not client.headers:
-                    self.send_json({"ok": False, "error": "未检测到有效的 cl.saz 凭证，无法向官方请求！"}, 400)
+                    self.send_json({"ok": False, "error": "当前未登录或缺少会员凭据，请先在右上角同步长龙会员登录！"}, 400)
                     return
                 try:
                     client.check_and_reload()
@@ -302,7 +302,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception as ex:
                     err_msg = str(ex)
                     if "100001" in err_msg or "403" in err_msg or "未登录" in err_msg:
-                        self.send_json({"ok": False, "error": "长龙微信小程序登录态已过期 (100001)，请手机微信查一次票更新 cl.saz"}, 400)
+                        self.send_json({"ok": False, "error": "长龙微信小程序登录态已过期 (100001)，请重新同步长龙会员登录"}, 400)
                     else:
                         self.send_json({"ok": False, "error": f"长龙接口请求异常: {err_msg}"}, 500)
                     return
@@ -557,12 +557,13 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             if auto_patrol.PATROL_STATE.get("running"):
                 self.send_json({"ok": False, "error": "当前已有巡检任务正在进行中，请等待完成"}, 400)
                 return
-            if not client.headers:
-                client.load_credentials()
+            
+            # 100% 优先且唯一从 SQLite 数据库重载会员凭据与畅飞卡模板
+            client.check_and_reload()
             if not client.headers:
                 self.send_json({
                     "ok": False,
-                    "error": "未能在 backend/data/ 目录下检测到有效的 cl.saz 凭证文件！请先放置抓包凭证再执行巡检。"
+                    "error": "未检测到有效会员登录凭据，请先在右上角点击同步长龙会员登录！"
                 }, 400)
                 return
 
@@ -628,7 +629,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
 
         elif path == "/api/auth/reset":
             res = reset_user_auth()
-            client.load_credentials()
+            client.check_and_reload()
             self.send_json(res, 200 if res.get("ok") else 500)
             return
 

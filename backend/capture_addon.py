@@ -33,27 +33,12 @@ for p in [BACKEND_DIR, BACKEND_DIR.parent, Path.cwd(), Path.cwd() / "backend"]:
     if p_str not in sys.path:
         sys.path.insert(0, p_str)
 
-DB_PATH_ENV = os.environ.get("CLAIRLINE_DB_PATH")
-DATA_DIR_ENV = os.environ.get("CLAIRLINE_DATA_DIR")
-if DB_PATH_ENV:
-    DB_PATH = Path(DB_PATH_ENV).resolve()
-    DATA_DIR = DB_PATH.parent
-elif DATA_DIR_ENV:
-    DATA_DIR = Path(DATA_DIR_ENV).resolve()
-    DB_PATH = DATA_DIR / "changlong.db"
+IPC_FILE_ENV = os.environ.get("CLAIRLINE_IPC_FILE")
+if IPC_FILE_ENV:
+    IPC_FILE = Path(IPC_FILE_ENV).resolve()
 else:
-    DATA_DIR = BACKEND_DIR / "data"
-    DB_PATH = DATA_DIR / "changlong.db"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-try:
-    import db
-    db.DB_PATH = DB_PATH
-    db.DATA_DIR = DATA_DIR
-    print(f"[*] 嗅探器插件绑定 SQLite 数据库路径: {db.DB_PATH}", flush=True)
-except Exception as ex:
-    print(f"[!] 嗅探器插件导入 db 模块失败: {ex}", flush=True)
-    db = None
+    IPC_FILE = BACKEND_DIR / "data" / ".capture_ipc.json"
+IPC_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 try:
     from loongair_client import fetch_full_user_profile
@@ -143,7 +128,7 @@ class LoongAirCapture:
         self.has_triggered_sync = False
 
     def _load_existing(self) -> dict:
-        data = {
+        return {
             "update_time": "",
             "headers": {},
             "template": {},
@@ -151,18 +136,6 @@ class LoongAirCapture:
             "calendar_template": {},
             "profile": {}
         }
-        if db:
-            try:
-                prof = db.get_user_profile() or {}
-                if prof.get("headers"):
-                    data["headers"] = prof["headers"]
-                if prof.get("template"):
-                    data["template"] = prof["template"]
-                data["profile"] = prof
-                data["update_time"] = prof.get("updated_at", "")
-            except Exception:
-                pass
-        return data
 
     def running(self):
         # 智能检测：如果当前没开启，则全自动开启
@@ -262,34 +235,15 @@ class LoongAirCapture:
         return res
 
     def _sync_to_db_and_file(self):
-        """将当前收集到的凭据与完整资料直接持久化至 SQLite 数据库（单一事实源）"""
+        """将当前收集到的凭据通过原子 IPC 文件提交给主程序，由主进程写入 SQLite 并销毁临时文件"""
         try:
-            if db:
-                headers = self.data.get("headers", {})
-                tpl = self.data.get("template", {})
-                prof = self.data.get("profile", {})
-                token = headers.get("authorization") or headers.get("Authorization") or ""
-                
-                db.save_user_profile({
-                    "user_name": prof.get("user_name") or "长龙会员",
-                    "mobile": prof.get("mobile") or tpl.get("mobile", ""),
-                    "member_level": prof.get("member_level") or "乘云会员",
-                    "cert_number": prof.get("cert_number") or tpl.get("certNumber", ""),
-                    "token": token,
-                    "cookie": headers.get("cookie", ""),
-                    "card_name": prof.get("card_name") or "长龙畅飞卡",
-                    "encrypted_user_id": prof.get("encrypted_user_id") or tpl.get("encryptedUserId", ""),
-                    "sec_card_grant_tid": prof.get("sec_card_grant_tid") or tpl.get("secCardGrantTid", ""),
-                    "coupons_count": prof.get("coupons_count", 0),
-                    "cards_count": prof.get("cards_count", 0),
-                    "points": prof.get("points", 0),
-                    "is_verified": prof.get("is_verified", 0),
-                    "headers": headers,
-                    "template": tpl,
-                    "updated_at": self.data.get("update_time", "")
-                })
+            temp_path = IPC_FILE.with_suffix(".tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+            temp_path.replace(IPC_FILE)
+            print("[IPC] 凭据数据已成功提交主程序管道！", flush=True)
         except Exception as e:
-            print(f"[!] 写入 SQLite 提示: {e}", flush=True)
+            print(f"[!] 写入 IPC 文件异常: {e}", flush=True)
 
     def _sync_full_profile(self, headers: dict):
         """核心智能机制：捕获到 Token 时，立即请求长龙官方接口获取真实姓名与等级，齐全后一次性落库"""
@@ -317,7 +271,7 @@ class LoongAirCapture:
                     print(f"[SUCCESS] [{now_str}] 智能抓取成功！已获取长龙会员档案！", flush=True)
                     print(f"  👤 会员姓名: {user_name} ({'已实名' if full_prof.get('is_verified') else '未实名'})")
                     print(f"  🏷️ 会员级别: {full_prof.get('member_level', '乘云会员')}")
-                    print(f"[FILE] 会员档案已完整写入 SQLite 数据库！")
+                    print(f"[IPC] 会员档案已成功移交主程序落库！")
                     print("=====================================================", flush=True)
                     print("[DONE] 抓取圆满完成！正在平稳恢复系统代理为直连...\n", flush=True)
                     self._delayed_shutdown(0.5)
@@ -430,7 +384,7 @@ class LoongAirCapture:
                     print(f"  👤 会员姓名: {prof.get('user_name')} ({'已实名' if prof.get('is_verified') else '未实名'})")
                     print(f"  🏷️ 会员级别: {prof.get('member_level', '乘云会员')}")
                     print(f"  🎟️ 账户资产: 卡包 {prof.get('cards_count', 0)} 张 | 券包 {prof.get('coupons_count', 0)} 张 | 积分 {prof.get('points', 0)}")
-                    print(f"[FILE] 凭证与资料已完整持久化至 SQLite 数据库！")
+                    print(f"[IPC] 凭据与资料已成功移交主程序落库！")
                     print("=====================================================", flush=True)
                     print("[DONE] 抓取完成！正在平稳恢复系统代理为直连...\n", flush=True)
 

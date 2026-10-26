@@ -213,7 +213,7 @@ def scan_routes_pool(client: SecCardClient, route_list: list[tuple[str, str]], p
                     consecutive_auth_fails += 1
                     if consecutive_auth_fails >= 2:
                         print(f"🛑 [安全熔断] 微信登录凭据已失效 (100001)，自动终止本次巡检队列，防止无效请求！")
-                        PATROL_STATE["status_text"] = "已自动安全熔断：微信登录态已过期，请在微信重新查一次票更新 cl.saz"
+                        PATROL_STATE["status_text"] = "已自动安全熔断：微信登录态已过期，请在客户端重新同步长龙会员登录！"
                         abort_event.set()
                         # 清空剩余队列
                         while not q.empty():
@@ -265,9 +265,9 @@ def run_patrol_cycle(client: SecCardClient, mode: str = "hot"):
         err_msg = str(preflight_err)
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 凭据自检失败: {err_msg}")
         PATROL_STATE["running"] = False
-        PATROL_STATE["status_text"] = f"巡检启动拦截：微信小程序登录凭证已失效 (100001)，请在微信长龙小程序查一次票并导出新 cl.saz 覆盖即可！"
+        PATROL_STATE["status_text"] = "巡检启动拦截：微信小程序登录凭证已失效 (100001)，请点击右上角重新同步长龙会员登录！"
         PATROL_STATE["failed"] = 1
-        raise RuntimeError("微信小程序登录凭证已失效 (100001)！请在手机微信长龙小程序点查一次票，导出覆盖 cl.saz 后再次点击！")
+        raise RuntimeError("微信小程序登录凭证已失效 (100001)！请点击右上角重新同步长龙会员登录！")
 
     try:
         if mode == "hot":

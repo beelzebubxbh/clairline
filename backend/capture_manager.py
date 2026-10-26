@@ -22,6 +22,7 @@ BACKEND_DIR = Path(__file__).resolve().parent
 DATA_DIR = getattr(db, "DATA_DIR", BACKEND_DIR / "data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CRED_FILE = DATA_DIR / "credentials.json"
+IPC_FILE = DATA_DIR / ".capture_ipc.json"
 
 def get_addon_path() -> Path:
     """智能定位 capture_addon.py 脚本路径（兼容源码运行与 PyInstaller 单文件解包环境）"""
@@ -190,8 +191,80 @@ class CaptureManager:
         self.last_capture_time = ""
         self.lock = threading.Lock()
 
+    def _consume_ipc_if_any(self) -> bool:
+        """主进程安全消费嗅探器输出的临时 IPC 管道数据，由主进程写入 SQLite，消费后即刻销毁临时文件"""
+        if not IPC_FILE.exists():
+            return False
+        with self.lock:
+            try:
+                if not IPC_FILE.exists():
+                    return False
+                c = IPC_FILE.read_text(encoding="utf-8").strip()
+                if not c:
+                    return False
+                data = json.loads(c)
+                headers = data.get("headers", {})
+                auth = headers.get("authorization") or headers.get("Authorization") or ""
+                tpl = data.get("template", {})
+                prof = data.get("profile", {})
+                update_time = data.get("update_time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                if auth and len(auth) > 15:
+                    # 主程序具备完整的网络和 Python 库，请求长龙官方接口补充会员姓名与卡信息
+                    try:
+                        from loongair_client import fetch_full_user_profile
+                        fetched = fetch_full_user_profile(headers)
+                        if fetched:
+                            prof.update(fetched)
+                    except Exception:
+                        pass
+
+                    profile = {
+                        "user_name": prof.get("user_name") or "长龙会员",
+                        "mobile": prof.get("mobile") or tpl.get("mobile", ""),
+                        "member_level": prof.get("member_level") or "乘云会员",
+                        "cert_number": prof.get("cert_number") or tpl.get("certNumber", ""),
+                        "token": auth,
+                        "cookie": headers.get("cookie", ""),
+                        "card_name": prof.get("card_name") or "长龙畅飞卡",
+                        "encrypted_user_id": prof.get("encrypted_user_id") or tpl.get("encryptedUserId", ""),
+                        "sec_card_grant_tid": prof.get("sec_card_grant_tid") or tpl.get("secCardGrantTid", ""),
+                        "coupons_count": prof.get("coupons_count", 0),
+                        "cards_count": prof.get("cards_count", 0),
+                        "points": prof.get("points", 0),
+                        "is_verified": prof.get("is_verified", 0),
+                        "headers": headers,
+                        "template": tpl,
+                        "updated_at": update_time
+                    }
+                    # 100% 由主进程写入 SQLite changlong.db
+                    db.save_user_profile(profile)
+
+                    try:
+                        from seccard_client import SecCardClient
+                        SecCardClient().check_and_reload()
+                    except Exception as e:
+                        print(f"⚠️ 热重载 SecCardClient 异常: {e}")
+
+                    self.status = "success"
+                    self.last_capture_time = update_time
+                    user_name = profile.get("user_name", "长龙会员")
+                    self.message = f"成功捕获会员凭据！(会员: {user_name}, 捕获时间: {update_time})"
+                    return True
+            except Exception as e:
+                print(f"⚠️ 消费 IPC 管道异常: {e}")
+            finally:
+                try:
+                    IPC_FILE.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        return False
+
     def get_auth_status(self) -> dict:
         """检查 SQLite 数据库中是否具备有效会员凭据（单一真实数据源）"""
+        # 实时尝试消费外部嗅探器提交的 IPC 管道数据
+        self._consume_ipc_if_any()
+
         profile = db.get_user_profile() or {}
         is_logged_in = bool(profile.get("token"))
         update_time = profile.get("updated_at", "")
@@ -306,6 +379,7 @@ class CaptureManager:
             try:
                 log_fp = open(mitm_log, "w", encoding="utf-8", errors="replace")
                 env = os.environ.copy()
+                env["CLAIRLINE_IPC_FILE"] = str(IPC_FILE.resolve())
                 env["CLAIRLINE_DATA_DIR"] = str(DATA_DIR.resolve())
                 env["CLAIRLINE_DB_PATH"] = str(getattr(db, "DB_PATH", DATA_DIR / "changlong.db").resolve())
 
@@ -387,7 +461,15 @@ class CaptureManager:
 
         ret = proc.wait()
 
+        # 核心兜底：进程退出瞬间，优先消费子进程提交的 IPC 管道凭据落库
+        self._consume_ipc_if_any()
+
         with self.lock:
+            if self.status == "success":
+                self.process = None
+                self._restore_system_proxy()
+                return
+
             # 校验 SQLite 数据库中是否已成功持久化捕获的会员凭据
             prof = db.get_user_profile() or {}
             auth = prof.get("token") or ""
