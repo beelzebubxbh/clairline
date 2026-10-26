@@ -370,8 +370,8 @@ if (typeof window !== 'undefined') {
 
 const updateInfo = ref({
   has_update: false,
-  current_version: 'v2.0.0',
-  latest_version: 'v2.0.0',
+  current_version: 'v2.1.0',
+  latest_version: 'v2.1.0',
   release_name: '',
   release_notes: '',
   page_url: 'https://github.com/eureka-wu/clairline/releases',
@@ -399,8 +399,8 @@ async function runCheckUpdate(manual = false) {
     } else if (manual) {
       updateInfo.value = {
         has_update: false,
-        current_version: 'v2.0.0',
-        latest_version: 'v2.0.0',
+        current_version: 'v2.1.0',
+        latest_version: 'v2.1.0',
         release_name: '长龙航空畅飞助手 v2.0',
         release_notes: '当前已是最新发布版本，暂无新版本发布。可访问 GitHub 开源仓库获取最新动态。',
         page_url: 'https://github.com/eureka-wu/clairline/releases'
@@ -411,8 +411,8 @@ async function runCheckUpdate(manual = false) {
     if (manual) {
       updateInfo.value = {
         has_update: false,
-        current_version: 'v2.0.0',
-        latest_version: 'v2.0.0',
+        current_version: 'v2.1.0',
+        latest_version: 'v2.1.0',
         release_name: '长龙航空畅飞助手 v2.0',
         release_notes: '当前已是最新发布版本。',
         page_url: 'https://github.com/eureka-wu/clairline/releases'

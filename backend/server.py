@@ -47,8 +47,8 @@ from seccard_client import AuthExpired
 db.init_db()
 
 PORT = 3000
-APP_VERSION = "v2.0.0"
-GITHUB_REPO = "eureka-wu/clairline"
+APP_VERSION = "v2.1.0"
+GITHUB_REPO = "beelzebubxbh/clairline"
 client = SecCardClient()
 scheduler = MonitorScheduler(client)
 
