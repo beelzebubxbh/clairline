@@ -352,9 +352,11 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         elif path == "/api/patrol/hot-routes":
-            # 从 SQLite 数据库读取巡检航线配置
-            routes = db.get_patrol_routes()
-            self.send_json({"ok": True, "routes": routes, "count": len(routes), "max": 30})
+            # 从 SQLite 数据库读取重点巡检航线详细配置 (含名称，不设上限)
+            routes = db.get_patrol_routes_detailed()
+            cfg = db.get_patrol_config()
+            interval = int(cfg.get("hot_interval_minutes", "25"))
+            self.send_json({"ok": True, "routes": routes, "count": len(routes), "interval": interval})
             return
 
         elif path == "/api/patrol/status":
@@ -504,23 +506,16 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
 
         elif path == "/api/patrol/hot-routes":
             routes = body.get("routes", [])
-            if not isinstance(routes, list):
-                self.send_json({"ok": False, "error": "routes 必须是数组"}, 400)
-                return
-            if len(routes) > 30:
-                self.send_json({"ok": False, "error": "巡检航线最多限制 30 条"}, 400)
-                return
-            cleaned_routes = []
-            seen = set()
-            for item in routes:
-                if isinstance(item, (list, tuple)) and len(item) >= 2:
-                    frm, to = str(item[0]).strip(), str(item[1]).strip()
-                    if frm and to and (frm, to) not in seen:
-                        seen.add((frm, to))
-                        cleaned_routes.append([frm, to])
-            # 持久化写入 SQLite 数据库
-            db.set_patrol_routes(cleaned_routes)
-            self.send_json({"ok": True, "routes": cleaned_routes, "count": len(cleaned_routes), "max": 30})
+            interval = body.get("interval")
+            if interval:
+                try:
+                    db.update_patrol_config({"hot_interval_minutes": str(int(interval))})
+                except Exception:
+                    pass
+            # 持久化写入 SQLite 数据库 (不设上限，支持每条航线名称)
+            count = db.set_patrol_routes(routes)
+            detailed = db.get_patrol_routes_detailed()
+            self.send_json({"ok": True, "routes": detailed, "count": count})
             return
 
         elif path == "/api/patrol/config":

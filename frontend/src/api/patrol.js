@@ -8,11 +8,11 @@ export async function fetchPatrolHotRoutes() {
   return await res.json();
 }
 
-export async function savePatrolHotRoutes(routes) {
+export async function savePatrolHotRoutes(routes, interval) {
   const res = await fetch('/api/patrol/hot-routes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ routes })
+    body: JSON.stringify({ routes, interval })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();

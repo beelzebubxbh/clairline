@@ -124,17 +124,26 @@ def init_db():
             )
         """)
 
-        # 2. 动态巡检航线配置表 (patrol_routes，上限 30 条)
+        # 2. 动态重点监控航线配置表 (patrol_routes，不设上限，支持自定义航线配置名称)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS patrol_routes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_city TEXT NOT NULL,
                 to_city TEXT NOT NULL,
+                route_name TEXT NOT NULL DEFAULT '',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
                 UNIQUE (from_city, to_city)
             )
         """)
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(patrol_routes)")
+            cols = [c[1] for c in cur.fetchall()]
+            if "route_name" not in cols:
+                conn.execute("ALTER TABLE patrol_routes ADD COLUMN route_name TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
 
         # 3. 航班直飞班次表 (flight_routes)
         conn.execute("""
@@ -311,32 +320,11 @@ def _seed_initial_data(conn: sqlite3.Connection):
         """, (k, v, desc, now_str))
 
     # 2. 种子：巡检航线 (patrol_routes)
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM patrol_routes")
-    if cur.fetchone()[0] == 0:
-        hot_file = DATA_DIR / "hot_routes.json"
-        routes = []
-        if hot_file.exists():
-            try: routes = json.loads(hot_file.read_text(encoding="utf-8"))
-            except Exception: pass
-        if not routes:
-            routes = [
-                ["杭州", "阿勒泰"], ["杭州", "喀什"], ["杭州", "克拉玛依"], ["杭州", "西双版纳"],
-                ["杭州", "丽江"], ["杭州", "三亚"], ["杭州", "海口"], ["杭州", "哈尔滨"],
-                ["杭州", "长春"], ["杭州", "成都"], ["杭州", "重庆"], ["杭州", "广州"],
-                ["杭州", "深圳"], ["杭州", "珠海"], ["杭州", "贵阳"], ["杭州", "昆明"],
-                ["杭州", "乌鲁木齐"], ["杭州", "西宁"], ["杭州", "银川"], ["杭州", "大连"],
-                ["杭州", "沈阳"], ["杭州", "海拉尔"], ["银川", "杭州"], ["银川", "乌鲁木齐"],
-                ["银川", "喀什"], ["银川", "三亚"], ["银川", "广州"], ["长春", "杭州"],
-                ["长春", "三亚"], ["长春", "成都"]
-            ]
-        for idx, (frm, to) in enumerate(routes[:30]):
-            conn.execute(
-                "INSERT OR IGNORE INTO patrol_routes (from_city, to_city, sort_order, updated_at) VALUES (?, ?, ?, ?)",
-                (frm, to, idx + 1, now_str)
-            )
+    # 用户明确要求：重点监控默认 0 个，不设置上限，纯净初始状态，随心添加
+    pass
 
     # 3. 种子：航班拓扑基础数据 (flight_routes)
+    cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM flight_routes")
     if cur.fetchone()[0] == 0:
         routes_file = DATA_DIR / "routes_seed.json"
@@ -744,37 +732,62 @@ def get_available_routes_dto() -> dict:
         conn.close()
 
 def get_patrol_routes() -> list[tuple[str, str]]:
-    """从数据库读取当前配置的巡检航线列表 (上限30条)"""
+    """从数据库读取当前配置的重点巡检航线列表 (不设上限)"""
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT from_city, to_city FROM patrol_routes ORDER BY sort_order ASC, id ASC LIMIT 30")
+        cur.execute("SELECT from_city, to_city FROM patrol_routes ORDER BY sort_order ASC, id ASC")
         return [(r[0], r[1]) for r in cur.fetchall()]
     finally:
         conn.close()
 
-def set_patrol_routes(routes: list[tuple[str, str]] | list[list[str]]) -> int:
-    """更新巡检航线列表 (严格上限 30 条)"""
+def get_patrol_routes_detailed() -> list[dict]:
+    """从数据库读取当前配置的重点巡检航线详细列表 (包含配置名称与序号，不设上限)"""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(patrol_routes)")
+        cols = [c[1] for c in cur.fetchall()]
+        has_name = "route_name" in cols
+        if has_name:
+            cur.execute("SELECT from_city, to_city, route_name FROM patrol_routes ORDER BY sort_order ASC, id ASC")
+            rows = cur.fetchall()
+            return [{"from": r[0], "to": r[1], "name": r[2] if r[2] else f"{r[0]} ➔ {r[1]}"} for r in rows]
+        else:
+            cur.execute("SELECT from_city, to_city FROM patrol_routes ORDER BY sort_order ASC, id ASC")
+            rows = cur.fetchall()
+            return [{"from": r[0], "to": r[1], "name": f"{r[0]} ➔ {r[1]}"} for r in rows]
+    finally:
+        conn.close()
+
+def set_patrol_routes(routes: list) -> int:
+    """更新巡检航线列表 (不设上限，支持存储自定义航线配置名称)"""
     cleaned = []
     seen = set()
     for item in routes:
-        if isinstance(item, (list, tuple)) and len(item) >= 2:
-            frm, to = str(item[0]).strip(), str(item[1]).strip()
+        if isinstance(item, dict):
+            frm = str(item.get("from", "")).strip()
+            to = str(item.get("to", "")).strip()
+            name = str(item.get("name", "")).strip()
             if frm and to and (frm, to) not in seen:
                 seen.add((frm, to))
-                cleaned.append((frm, to))
-                if len(cleaned) >= 30:
-                    break
+                cleaned.append((frm, to, name))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            frm, to = str(item[0]).strip(), str(item[1]).strip()
+            name = str(item[2]).strip() if len(item) > 2 else ""
+            if frm and to and (frm, to) not in seen:
+                seen.add((frm, to))
+                cleaned.append((frm, to, name))
 
     conn = get_connection()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with conn:
             conn.execute("DELETE FROM patrol_routes")
-            for idx, (frm, to) in enumerate(cleaned):
+            for idx, (frm, to, name) in enumerate(cleaned):
                 conn.execute(
-                    "INSERT INTO patrol_routes (from_city, to_city, sort_order, updated_at) VALUES (?, ?, ?, ?)",
-                    (frm, to, idx + 1, now_str)
+                    "INSERT INTO patrol_routes (from_city, to_city, route_name, sort_order, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (frm, to, name, idx + 1, now_str)
                 )
         return len(cleaned)
     finally:

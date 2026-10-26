@@ -45,14 +45,12 @@ DEFAULT_TOP_30_HOT_ROUTES: list[tuple[str, str]] = [
 ]
 
 def load_hot_routes() -> list[tuple[str, str]]:
-    """优先从 SQLite 数据库表 patrol_routes 读取巡检航线配置 (上限 30 条)"""
+    """从 SQLite 数据库表 patrol_routes 读取重点巡检航线配置 (不设上限，默认0条)"""
     try:
         routes = db.get_patrol_routes()
-        if routes:
-            return routes
+        return routes or []
     except Exception:
-        pass
-    return list(DEFAULT_TOP_30_HOT_ROUTES)
+        return []
 
 class RateLimiter:
     """发包间隔控制器：确保两请求间严格遵守最小间隔并增加微抖动，模拟真人访问"""
@@ -280,7 +278,11 @@ def run_patrol_cycle(client: SecCardClient, mode: str = "hot"):
     try:
         if mode == "hot":
             hot_routes = load_hot_routes()
-            new_data = scan_routes_pool(client, hot_routes, f"Tier 1 核心热门 ({len(hot_routes)}条)", batch_id)
+            if not hot_routes:
+                PATROL_STATE["running"] = False
+                PATROL_STATE["status_text"] = "当前未添加任何重点监控航线，请先在设置中添加关注的航线！"
+                raise RuntimeError("当前未添加任何重点监控航线，请先在右上角【航线监控】设置中添加您关注的航线！")
+            new_data = scan_routes_pool(client, hot_routes, f"重点监控航线 ({len(hot_routes)}条)", batch_id)
         else:
             all_routes = load_all_routes()
             new_data = scan_routes_pool(client, all_routes, "Tier 2 全网直飞拓扑", batch_id)

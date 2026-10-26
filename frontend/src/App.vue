@@ -106,6 +106,7 @@
       :patrol-state="patrolState"
       @close="patrolModalVisible = false"
       @triggered="handlePatrolTriggered"
+      @expand-full="handleExpandFull"
       @saved="() => { showToast('监控配置已成功保存！'); }"
     />
 
@@ -477,11 +478,12 @@ function handlePatrolTriggered() {
 }
 
 function handleOpenPatrol() {
-  if (patrolState.value.running) {
-    fullPatrolVisible.value = true;
-  } else {
-    patrolModalVisible.value = true;
-  }
+  patrolModalVisible.value = true;
+}
+
+function handleExpandFull() {
+  patrolModalVisible.value = false;
+  fullPatrolVisible.value = true;
 }
 
 function handleMinimizePatrol() {

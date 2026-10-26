@@ -12,9 +12,9 @@
             </div>
           </div>
 
-          <!-- 头部标题 -->
+          <!-- 头部标题 (动态区分全网普查与重点巡检) -->
           <h2 class="patrol-main-title">
-            {{ isCompleted ? '全网航网普查圆满完成！' : '正在为您全网普查 397 条直飞航线' }}
+            {{ modeTitle }}
           </h2>
 
           <!-- 会员绑定状态信息条 -->
@@ -42,7 +42,7 @@
             </div>
             <div class="progress-bar-meta">
               <span class="percent-text">{{ displayPercent }}%</span>
-              <span class="counter-text">已普查 {{ patrolState?.completed || 0 }} / {{ patrolState?.total || 397 }} 条直飞航线</span>
+              <span class="counter-text">{{ counterText }}</span>
             </div>
           </div>
 
@@ -57,8 +57,8 @@
               <div class="stat-desc">成功调取日历</div>
             </div>
             <div class="stat-card">
-              <div class="stat-val">{{ (patrolState?.total || 397) - (patrolState?.completed || 0) }}</div>
-              <div class="stat-desc">待检索航线</div>
+              <div class="stat-val">{{ Math.max(0, safeTotal - (patrolState?.completed || 0)) }}</div>
+              <div class="stat-desc">{{ remainingText }}</div>
             </div>
           </div>
 
@@ -96,13 +96,42 @@ const isCompleted = computed(() => {
   return props.patrolState?.percent >= 100 || (!props.patrolState?.running && props.patrolState?.completed > 0);
 });
 
+const isAllMode = computed(() => {
+  return props.patrolState?.mode === 'all' || (props.patrolState?.total && props.patrolState.total > 50);
+});
+
+const safeTotal = computed(() => {
+  if (props.patrolState?.total && props.patrolState.total > 0) return props.patrolState.total;
+  return isAllMode.value ? 490 : 30;
+});
+
+const modeTitle = computed(() => {
+  const total = safeTotal.value;
+  if (isCompleted.value) {
+    return isAllMode.value ? `全网直飞航网普查圆满完成！(共 ${total} 条)` : `重点监控航线巡检完成！(共 ${total} 条)`;
+  }
+  return isAllMode.value ? `正在为您全网普查 ${total} 条直飞航线` : `正在为您巡检 ${total} 条重点监控航线`;
+});
+
+const counterText = computed(() => {
+  const completed = props.patrolState?.completed || 0;
+  const total = safeTotal.value;
+  const label = isAllMode.value ? '直飞航线' : '重点航线';
+  const action = isAllMode.value ? '已普查' : '已巡检';
+  return `${action} ${completed} / ${total} 条${label}`;
+});
+
+const remainingText = computed(() => {
+  return isAllMode.value ? '待检索航线' : '待巡检航线';
+});
+
 const displayPercent = computed(() => {
   if (isCompleted.value) return 100;
   return Math.min(Math.max(props.patrolState?.percent || 2, 2), 100);
 });
 
 const formatCurrentRoute = computed(() => {
-  if (isCompleted.value) return '全部直飞航线已普查完毕，机位大盘已就绪';
+  if (isCompleted.value) return '全部航线已处理完毕，机位大盘已就绪';
   const r = props.patrolState?.current_route;
   if (Array.isArray(r) && r.length >= 2) {
     return `${r[0]} ➔ ${r[1]}`;
