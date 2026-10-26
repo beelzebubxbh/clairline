@@ -84,13 +84,20 @@ def build():
     if res.returncode == 0:
         dist_dir = ROOT_DIR / "dist"
         cn_exe = dist_dir / "长龙航空畅飞助手.exe"
-        en_exe = dist_dir / "LoongAirHelper.exe"
+        v2_exe = dist_dir / "长龙航空畅飞助手-v2.0.0.exe"
 
-        # 同时也保留一份英文名称镜像供全球化/备用需求
+        # 在 dist 目录下生成版本号规范命名的中文发布版
         try:
-            shutil.copy2(str(cn_exe), str(en_exe))
+            if cn_exe.exists():
+                shutil.copy2(str(cn_exe), str(v2_exe))
         except Exception:
             pass
+
+        # 清除可能残留的英文版过渡文件
+        en_exe = dist_dir / "LoongAirHelper.exe"
+        if en_exe.exists():
+            try: en_exe.unlink()
+            except Exception: pass
 
         # 强制通知 Windows 资源管理器即时刷新图标缓存
         try:
@@ -99,12 +106,13 @@ def build():
         except Exception:
             pass
 
-        size_mb = cn_exe.stat().st_size / (1024 * 1024) if cn_exe.exists() else 0
+        size_mb = v2_exe.stat().st_size / (1024 * 1024) if v2_exe.exists() else 0
         print("\n" + "=" * 65)
-        print("[SUCCESS] 打包圆满成功！")
-        print(f"[FILE] 客户端 Exe 路径: {cn_exe}")
-        print(f"[INFO] 文件体积: {size_mb:.2f} MB")
-        print("[TIP] 推荐发布方式：直接上传至 GitHub Releases (https://github.com/eureka-wu/clairline/releases)")
+        print("[SUCCESS] 打包圆满成功！纯中文正式版已就绪于 dist/ 目录：")
+        print(f"[FILE 1] {v2_exe}")
+        print(f"[FILE 2] {cn_exe}")
+        print(f"[INFO]   文件体积: {size_mb:.2f} MB")
+        print("[TIP]    发布方式：直接将 dist/长龙航空畅飞助手-v2.0.0.exe 上传至 GitHub Releases")
         print("=" * 65)
     else:
         print("[!] 打包过程中发生异常，请检查上方控制台报错。")
