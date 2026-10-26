@@ -99,11 +99,12 @@ def scan_routes_pool(client: SecCardClient, route_list: list[tuple[str, str]], p
     is_hot_pool = total <= 35
     min_interval = default_delay if is_hot_pool else 1.1
 
-    rate_limiter = RateLimiter(min_interval=min_interval) if is_hot_pool else None
+    rate_limiter = RateLimiter(min_interval=min_interval)
     if is_hot_pool:
         print(f"  ⏱️ 节奏控制：慢速拟人巡检模式 (~{min_interval:.1f}秒/条)，安全无感，实时落库...")
     else:
-        print(f"  🚀 全网普查模式：采用 4 线程受控并发池，预计 60~90 秒平滑完成全网 397 条航线普查并实时落库...")
+        print(f"  🐢 全网普查模式：全局共享限速 {min_interval:.1f}秒/条，"
+              f"约需 {total * min_interval / 60:.0f} 分钟完成（macOS 版已禁用原版 8 次/秒的高频扫描）")
     results = {}
     lock = threading.Lock()
     q = queue.Queue()
@@ -135,11 +136,8 @@ def scan_routes_pool(client: SecCardClient, route_list: list[tuple[str, str]], p
                 mode_label = "正在慢速巡检" if is_hot_pool else "正在全网普查"
                 PATROL_STATE["status_text"] = f"{mode_label}: {frm} ➔ {to} ({PATROL_STATE['completed'] + 1}/{total})"
 
-            if rate_limiter:
-                rate_limiter.wait()
-            else:
-                # 全量 397 条并发错峰，微延时 0.25~0.45s 既高效又稳定
-                time.sleep(random.uniform(0.25, 0.45))
+            # macOS 版：两种模式统一走全局限速器，杜绝原版“8 次/秒”的高频扫描
+            rate_limiter.wait()
 
             t_start = time.perf_counter()
             cal_map = None

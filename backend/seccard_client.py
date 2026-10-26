@@ -16,6 +16,13 @@ API = "https://www.loongair.cn/webhandler.ashx"
 BACKEND_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BACKEND_DIR.parent
 
+# 凭据存放位置（macOS 版）：用户目录，600 权限，永不进仓库
+USER_CRED_PATH = Path.home() / ".clairline" / "credentials.json"
+
+
+class AuthExpired(RuntimeError):
+    """登录态失效，需要重新抓取 Token。单独成类以便上层返回可识别的状态码。"""
+
 CITY_IATA = {
  '阿勒泰':'AAT','阿拉尔':'ACF','阿克苏':'AKU','巴中':'BZX','广州':'CAN','郑州':'CGO',
  '长春':'CGQ','重庆':'CKG','长沙':'CSX','成都':'CTU','大连':'DLC','东营':'DOY',
@@ -87,7 +94,7 @@ class SecCardClient:
         except Exception:
             db_data_dir = None
 
-        candidates = []
+        candidates = [USER_CRED_PATH]
         if db_data_dir:
             candidates.append(db_data_dir / "credentials.json")
         candidates.append(BACKEND_DIR / "data" / "credentials.json")
@@ -108,9 +115,10 @@ class SecCardClient:
             import db
             prof = db.get_user_profile()
             if prof and prof.get("token"):
-                up_time = prof.get("updated_at", "")
-                today_str = datetime.now().strftime("%Y-%m-%d")
-                if not (up_time and up_time[:10] != today_str):
+                # macOS 版改动：不再按“自然日 00:00”强制作废凭据。
+                # 原逻辑假设 Token 每天过期，但实际寿命由服务端决定，
+                # 强制作废会丢弃明明还能用的凭据。改为“用到报错再刷新”。
+                if True:
                     headers = prof.get("headers") or {}
                     if not headers:
                         headers = {
@@ -163,15 +171,8 @@ class SecCardClient:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # 核心机制：每天北京时间 00:00 自动将凭证标记为过期清空 (微信小程序 Session 自然日失效)
-            up_time = data.get("update_time", "")
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            if up_time and up_time[:10] != today_str:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ 凭据更新于 {up_time[:10]}，已跨越北京时间 00:00 自然日失效周期，自动清空旧凭证，请同步最新长龙登录。")
-                self.headers = {}
-                self.template = {}
-                return
-
+            # macOS 版改动：移除了原版“跨自然日自动清空凭据”的逻辑。
+            # 凭据是否有效交给服务端判断，失效时 call_api 会抛 AuthExpired。
             headers = data.get("headers", {})
             params = data.get("search_template") or data.get("template", {})
             if headers:
@@ -201,6 +202,10 @@ class SecCardClient:
                 ]:
                     if not params.get(k_param) and prof.get(k_prof):
                         params[k_param] = prof[k_prof]
+
+                # macOS 版凭据文件里 certNumber 单独存放（不进模板）
+                if data.get("cert_number") and not params.get("certNumber"):
+                    params["certNumber"] = data["cert_number"]
 
                 # 若缺少 encryptedUserId（如仅浏览了日历），从历史 saz 模板继承永久身份字段
                 if not params.get("encryptedUserId") or not params.get("secCardGrantTid"):
@@ -267,7 +272,9 @@ class SecCardClient:
         # 调用前热重载检查
         self.check_and_reload()
         if not self.headers:
-            raise RuntimeError("登录态未就绪：请确保 backend/data/cl.saz 或 changlong.saz 存在并有效")
+            raise RuntimeError(
+                "登录态未就绪：请先运行 `python3 backend/refresh_token.py` 抓取一次小程序登录态"
+            )
         body_obj = {
             "AppID": "ClientService",
             "MethodName": method,
@@ -276,31 +283,46 @@ class SecCardClient:
         data = ("paras=" + quote(json.dumps(body_obj, ensure_ascii=False))).encode("utf-8")
         h = dict(self.headers)
         h["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+
+        # 长龙 WAF 硬性校验：缺少 Accept-Encoding 会直接返回 403。
+        # 这是实测结论，不是猜测 —— 同一套头加上它就从 403 变 200。
+        ae = (h.get("Accept-Encoding") or "").lower()
+        if not ae:
+            h["Accept-Encoding"] = "gzip, deflate"
+        elif "br" in ae:
+            # 标准库没有 brotli，去掉 br 让服务端用 gzip 就好
+            h["Accept-Encoding"] = "gzip, deflate"
+
         req = urllib.request.Request(API, data=data, headers=h, method="POST")
         try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open(req, timeout=15) as r:
+            with opener.open(req, timeout=20) as r:
                 raw_bytes = r.read()
-                if raw_bytes[:2] == b"\x1f\x8b":
+                enc = (r.headers.get("Content-Encoding") or "").lower()
+                if raw_bytes[:2] == b"\x1f\x8b" or "gzip" in enc:
                     raw_bytes = gzip.decompress(raw_bytes)
+                elif "deflate" in enc:
+                    import zlib
+                    raw_bytes = zlib.decompress(raw_bytes)
                 payload = json.loads(raw_bytes.decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
-            if e.code == 403:
-                # 尝试强制热重载重试一次
+            if e.code in (401, 403):
                 if retry_on_auth_err:
                     self.check_and_reload(force=True)
                     return self.call_api(method, params, retry_on_auth_err=False)
-                raise RuntimeError("长龙接口 403 Forbidden：登录 Session 已失效，请在手机微信重新打开小程序查一次票，导出覆盖 cl.saz 即可恢复")
+                raise AuthExpired(
+                    f"长龙接口返回 {e.code}：登录态已失效，请重新运行 refresh_token.py 抓取"
+                )
             raise RuntimeError(f"长龙接口 HTTP 错误: {e.code}")
         except Exception as e:
             raise RuntimeError(f"网络请求失败: {e}")
 
         if payload.get("ErrorCode") == 100001:
-            # 未登录：尝试强制重载最新 saz 重试一次
+            # 未登录
             if retry_on_auth_err:
                 self.check_and_reload(force=True)
                 return self.call_api(method, params, retry_on_auth_err=False)
-            raise RuntimeError("长龙接口未登录 (100001)：微信小程序登录态已过期，请在手机微信点开长龙航空畅飞卡随意查一次票，导出新 cl.saz 覆盖即可立即恢复！")
+            raise AuthExpired("长龙接口未登录 (100001)：登录态已过期，请重新抓取")
 
         if payload.get("ErrorCode") != 0:
             raise RuntimeError(f"长龙接口错误 ({payload.get('ErrorCode')}): {payload.get('message')}")

@@ -858,12 +858,11 @@ onMounted(async () => {
   await refreshAuthStatus();
   runCheckUpdate(false);
 
-  // 核心自动化机制：已登录但本地有票航线少于 50 条 (说明全网 397 条航线日历尚未普查全)，全自动调起全网普查！
-  if (authStatus.value?.is_logged_in) {
-    if (availableRoutes.value.length < 50 && !patrolState.value.running) {
-      console.log('检测到尚未完成全网 397 条航线普查，全自动调起全网普查向导...');
-      startFullPatrol();
-    }
+  // macOS 版改动：移除了“打开页面就自动拉全网 397 条航线普查”的逻辑。
+  // 原逻辑会在用户不知情时瞬间打对方 397 次接口 —— 既慢又极易触发风控。
+  // 改为完全手动：由用户点击「全网普查」按钮才启动。
+  if (authStatus.value?.is_logged_in && availableRoutes.value.length < 50) {
+    console.log('提示：尚未执行全网普查，可手动点击「全网普查」启动。');
   }
 });
 

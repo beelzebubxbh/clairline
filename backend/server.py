@@ -38,7 +38,7 @@ import threading
 import db
 from seccard_client import SecCardClient, CITY_IATA, IATA_CITY
 from scheduler import MonitorScheduler
-from capture_manager import capture_mgr, install_root_cert, uninstall_root_cert, reset_user_auth
+from mac_auth import capture_mgr, install_root_cert, uninstall_root_cert, reset_user_auth
 
 
 # 初始化本地 SQLite 数据库

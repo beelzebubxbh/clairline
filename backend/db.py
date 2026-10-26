@@ -57,9 +57,11 @@ elif getattr(sys, "frozen", False):
     PROJECT_DIR = BACKEND_DIR.parent
     DB_PATH = DATA_DIR / "changlong.db"
 else:
+    # macOS 版：数据默认放用户目录，保持仓库干净（可用 CLAIRLINE_DATA_DIR 覆盖）
     BACKEND_DIR = Path(__file__).resolve().parent
-    DATA_DIR = BACKEND_DIR / "data"
-    SEED_FILE = DATA_DIR / "routes_seed.json"
+    DATA_DIR = Path.home() / ".clairline" / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SEED_FILE = BACKEND_DIR / "data" / "routes_seed.json"
     PROJECT_DIR = BACKEND_DIR.parent
     DB_PATH = DATA_DIR / "changlong.db"
 
