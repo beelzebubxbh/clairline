@@ -6,7 +6,7 @@
       :patrol-state="patrolState"
       :auth-status="authStatus"
       :update-info="updateInfo"
-      @open-patrol="patrolModalVisible = true"
+      @open-patrol="handleOpenPatrol"
       @open-auth="openAuthModal(false)"
       @open-update="openUpdateModal"
     />
@@ -105,7 +105,7 @@
       :visible="patrolModalVisible"
       :patrol-state="patrolState"
       @close="patrolModalVisible = false"
-      @triggered="startPatrolPolling"
+      @triggered="handlePatrolTriggered"
       @saved="() => { showToast('监控配置已成功保存！'); }"
     />
 
@@ -131,9 +131,45 @@
     <FullPatrolProgress 
       :visible="fullPatrolVisible"
       :patrol-state="patrolState"
+      :auth-status="authStatus"
+      :available-routes-count="availableRoutes.length"
+      @minimize="handleMinimizePatrol"
       @close="fullPatrolVisible = false"
       @cancel="fullPatrolVisible = false"
+      @completed="handleFullPatrolCompleted"
     />
+
+    <!-- 转入后台时的常驻高质感悬浮进度微卡片 (Mini Floating Radar Widget) -->
+    <transition name="mini-pop">
+      <div 
+        v-if="patrolState.running && !fullPatrolVisible" 
+        class="mini-patrol-widget"
+        @click="fullPatrolVisible = true"
+        title="点击重新展开全屏高质感普查大雷达"
+      >
+        <div class="mini-widget-inner">
+          <div class="mini-radar-avatar">
+            <span v-html="ICONS.radar" class="mini-spin-radar"></span>
+          </div>
+          <div class="mini-widget-body">
+            <div class="mini-widget-top">
+              <span class="mini-badge-mode">{{ patrolState.mode === 'all' ? '全网普查中' : '重点巡检中' }}</span>
+              <span class="mini-percent">{{ patrolState.percent || 0 }}%</span>
+            </div>
+            <div class="mini-route-info">
+              <span class="mini-route-text">{{ formatMiniCurrentRoute }}</span>
+              <span class="mini-counter">({{ patrolState.completed }}/{{ patrolState.total || 397 }})</span>
+            </div>
+            <div class="mini-progress-track">
+              <div class="mini-progress-fill" :style="{ width: `${patrolState.percent || 2}%` }"></div>
+            </div>
+          </div>
+          <div class="mini-expand-btn">
+            <span v-html="ICONS.arrowRight"></span>
+          </div>
+        </div>
+      </div>
+    </transition>
 
     <!-- 全局现代高质感 EXE 模态对话框 (替换丑陋的浏览器原生 alert) -->
     <AppDialog 
@@ -247,6 +283,16 @@ if (typeof window !== 'undefined') {
 }
 
 let patrolPollTimer = null;
+let incrementalTick = 0;
+
+const formatMiniCurrentRoute = computed(() => {
+  const r = patrolState.value?.current_route;
+  if (Array.isArray(r) && r.length >= 2) {
+    return `${r[0]} ➔ ${r[1]}`;
+  }
+  if (typeof r === 'string' && r) return r;
+  return '连接长龙航网数据中...';
+});
 
 async function checkPatrolStatus() {
   try {
@@ -256,9 +302,15 @@ async function checkPatrolStatus() {
       patrolState.value = res.state;
       if (res.state.running) {
         if (!patrolPollTimer) {
-          patrolPollTimer = setInterval(checkPatrolStatus, 1200);
+          patrolPollTimer = setInterval(checkPatrolStatus, 1000);
+        }
+        // 后台普查期间每 4 秒静默增量刷新一次大盘航线，让用户看到新查出来的航线
+        incrementalTick++;
+        if (incrementalTick % 4 === 0) {
+          initData();
         }
       } else {
+        incrementalTick = 0;
         if (patrolPollTimer) {
           clearInterval(patrolPollTimer);
           patrolPollTimer = null;
@@ -268,7 +320,7 @@ async function checkPatrolStatus() {
             fullPatrolVisible.value = false;
             showAppDialog('全网普查完成', '已完成全网航线机位探测普查，放票大盘已全面就绪！', 'success');
           } else {
-            showToast('航线监控完成，放票日历已全面更新！');
+            showToast('全网普查完成，放票日历已全面更新！');
           }
           initData();
         }
@@ -285,7 +337,7 @@ async function checkPatrolStatus() {
 function startPatrolPolling() {
   checkPatrolStatus();
   if (!patrolPollTimer) {
-    patrolPollTimer = setInterval(checkPatrolStatus, 1200);
+    patrolPollTimer = setInterval(checkPatrolStatus, 1000);
   }
 }
 
@@ -391,26 +443,62 @@ async function refreshAuthStatus(directData) {
   } catch (e) {}
 }
 
-async function handleAuthSynced() {
-  showToast('长龙会员登录成功！已自动存入个人数据库');
-  refreshAuthStatus();
-  // 消除长龙官方接口 0.5 秒异步网络时序差：延迟 800ms 与 1800ms 静默刷新，100% 自动显示真实姓名
-  setTimeout(refreshAuthStatus, 800);
-  setTimeout(refreshAuthStatus, 1800);
-  initData();
-
-  // 核心自动化流水线：登录成功后，全自动触发全网 397 条航线普查，并弹出全屏高美感发光雷达进度条
+// 触发全网 397 条航线普查并调起全屏发光雷达扫描进度条
+async function startFullPatrol() {
+  fullPatrolVisible.value = true;
+  startPatrolPolling();
   try {
     const res = await triggerPatrol('all');
     if (res && res.ok) {
-      fullPatrolVisible.value = true;
-      startPatrolPolling();
+      if (!res.already_running) {
+        showToast('已全自动启动全网 397 条直飞航线普查！');
+      }
     } else {
-      showAppDialog('普查提示', res?.error || '未能自动启动全网普查，您可以随时在右上角点击普查', 'warning');
+      if (res?.error && !res.error.includes('已有巡检')) {
+        showAppDialog('普查提示', res.error, 'warning');
+      }
     }
   } catch (err) {
     showAppDialog('网络异常', '自动启动全网普查请求异常: ' + (err.message || '网络连接失败'), 'error');
   }
+}
+
+function handleFullPatrolCompleted() {
+  fullPatrolVisible.value = false;
+  showToast('全网 397 条直飞航线普查完毕，已全面更新入库！');
+  initData();
+}
+
+function handlePatrolTriggered() {
+  startPatrolPolling();
+  if (patrolState.value.mode === 'all' || !patrolState.value.mode) {
+    fullPatrolVisible.value = true;
+  }
+}
+
+function handleOpenPatrol() {
+  if (patrolState.value.running) {
+    fullPatrolVisible.value = true;
+  } else {
+    patrolModalVisible.value = true;
+  }
+}
+
+function handleMinimizePatrol() {
+  fullPatrolVisible.value = false;
+  showToast('已转入后台普查，可在右下角随时查看实时进度与重新展开！');
+}
+
+async function handleAuthSynced() {
+  showToast('长龙会员登录成功！已自动存入个人数据库');
+  refreshAuthStatus();
+  // 消除长龙官方接口异步网络时序差：延迟 600ms 与 1500ms 静默刷新，100% 自动显示真实姓名
+  setTimeout(refreshAuthStatus, 600);
+  setTimeout(refreshAuthStatus, 1500);
+  initData();
+
+  // 核心自动化流水线：登录成功后，全自动触发全网 397 条航线普查，并弹出全屏高美感发光雷达进度条
+  startFullPatrol();
 }
 
 // 就地微气泡状态与防抖定时器
@@ -762,11 +850,19 @@ function openDrawer(route) {
   drawerVisible.value = true;
 }
 
-onMounted(() => {
-  initData();
+onMounted(async () => {
+  await initData();
   checkPatrolStatus();
-  refreshAuthStatus();
+  await refreshAuthStatus();
   runCheckUpdate(false);
+
+  // 核心自动化机制：已登录但本地有票航线少于 50 条 (说明全网 397 条航线日历尚未普查全)，全自动调起全网普查！
+  if (authStatus.value?.is_logged_in) {
+    if (availableRoutes.value.length < 50 && !patrolState.value.running) {
+      console.log('检测到尚未完成全网 397 条航线普查，全自动调起全网普查向导...');
+      startFullPatrol();
+    }
+  }
 });
 
 </script>
@@ -792,5 +888,155 @@ onMounted(() => {
 @keyframes fadeIn {
   from { opacity: 0; transform: translate(-50%, 10px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* 右下角高质感悬浮微型雷达进度卡片 */
+.mini-patrol-widget {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(2, 132, 199, 0.35);
+  box-shadow: 0 12px 32px rgba(2, 132, 199, 0.22), 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-radius: 16px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  max-width: 330px;
+  width: calc(100vw - 48px);
+}
+
+.mini-patrol-widget:hover {
+  transform: translateY(-3px) scale(1.02);
+  border-color: rgba(2, 132, 199, 0.6);
+  box-shadow: 0 16px 36px rgba(2, 132, 199, 0.3), 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.mini-widget-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mini-radar-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.35);
+}
+
+.mini-spin-radar {
+  display: flex;
+  font-size: 1.1rem;
+  animation: radar-spin 2.5s linear infinite;
+}
+
+.mini-widget-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.mini-widget-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.mini-badge-mode {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #0284c7;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.mini-percent {
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #0369a1;
+}
+
+.mini-route-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.73rem;
+  color: #475569;
+  margin-bottom: 4px;
+}
+
+.mini-route-text {
+  font-weight: 700;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.mini-counter {
+  font-size: 0.7rem;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.mini-progress-track {
+  width: 100%;
+  height: 5px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.mini-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0284c7 0%, #38bdf8 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.mini-expand-btn {
+  color: #0284c7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  flex-shrink: 0;
+  padding: 4px;
+  border-radius: 6px;
+  transition: transform 0.2s ease;
+}
+
+.mini-patrol-widget:hover .mini-expand-btn {
+  transform: translateX(2px);
+}
+
+.mini-pop-enter-active,
+.mini-pop-leave-active {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mini-pop-enter-from,
+.mini-pop-leave-to {
+  opacity: 0;
+  transform: translateY(20px) scale(0.9);
+}
+
+@keyframes radar-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

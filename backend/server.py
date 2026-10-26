@@ -555,7 +555,13 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             if mode not in ["hot", "all"]:
                 mode = "hot"
             if auto_patrol.PATROL_STATE.get("running"):
-                self.send_json({"ok": False, "error": "当前已有巡检任务正在进行中，请等待完成"}, 400)
+                current_mode = auto_patrol.PATROL_STATE.get("mode", "hot")
+                self.send_json({
+                    "ok": True, 
+                    "already_running": True, 
+                    "mode": current_mode,
+                    "message": f"当前已有{'全网普查' if current_mode == 'all' else '热门巡检'}正在进行中，已自动连接实时进度！"
+                }, 200)
                 return
             
             # 100% 优先且唯一从 SQLite 数据库重载会员凭据与畅飞卡模板

@@ -101,9 +101,11 @@ def scan_routes_pool(client: SecCardClient, route_list: list[tuple[str, str]], p
     is_hot_pool = total <= 35
     min_interval = default_delay if is_hot_pool else 1.1
 
-    rate_limiter = RateLimiter(min_interval=min_interval)
+    rate_limiter = RateLimiter(min_interval=min_interval) if is_hot_pool else None
     if is_hot_pool:
         print(f"  ⏱️ 节奏控制：慢速拟人巡检模式 (~{min_interval:.1f}秒/条)，安全无感，实时落库...")
+    else:
+        print(f"  🚀 全网普查模式：采用 4 线程受控并发池，预计 60~90 秒平滑完成全网 397 条航线普查并实时落库...")
     results = {}
     lock = threading.Lock()
     q = queue.Queue()
@@ -132,9 +134,15 @@ def scan_routes_pool(client: SecCardClient, route_list: list[tuple[str, str]], p
             
             with lock:
                 PATROL_STATE["current_route"] = [frm, to]
-                PATROL_STATE["status_text"] = f"正在慢速巡检: {frm} ➔ {to} ({PATROL_STATE['completed'] + 1}/{total})"
+                mode_label = "正在慢速巡检" if is_hot_pool else "正在全网普查"
+                PATROL_STATE["status_text"] = f"{mode_label}: {frm} ➔ {to} ({PATROL_STATE['completed'] + 1}/{total})"
 
-            rate_limiter.wait()
+            if rate_limiter:
+                rate_limiter.wait()
+            else:
+                # 全量 397 条并发错峰，微延时 0.25~0.45s 既高效又稳定
+                time.sleep(random.uniform(0.25, 0.45))
+
             t_start = time.perf_counter()
             cal_map = None
             last_err = None
@@ -229,8 +237,8 @@ def scan_routes_pool(client: SecCardClient, route_list: list[tuple[str, str]], p
                     pass
 
     threads = []
-    # 核心热门用单线程极速温和跑（避免并发特征）；全量 398 条用双并发错峰跑
-    worker_num = 1 if is_hot_pool else 2
+    # 核心热门用单线程极速温和跑 (拟人避让)；全网 397 条用 4 并发受控并发池跑 (约60~90秒)
+    worker_num = 1 if is_hot_pool else 4
     for _ in range(worker_num):
         t = threading.Thread(target=worker, daemon=True)
         t.start()

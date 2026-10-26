@@ -133,11 +133,12 @@ const headerLabel = computed(() => {
   if (!props.patrolState?.running) {
     return '航线监控';
   }
-  const { mode, completed, total } = props.patrolState;
+  const { mode, completed, total, percent } = props.patrolState;
   const isAll = mode === 'all';
   const safeTotal = total > 0 ? total : (isAll ? 397 : 30);
   const prefix = isAll ? '普查中' : '监控中';
-  return `${prefix} ${completed}/${safeTotal}`;
+  const pct = percent !== undefined && percent !== null ? ` (${percent}%)` : '';
+  return `${prefix} ${completed}/${safeTotal}${pct}`;
 });
 </script>
 

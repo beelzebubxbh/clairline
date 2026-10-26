@@ -190,15 +190,26 @@ function onGlobalClick(e) {
   }
 }
 
+// 页面滚动时自动关闭气泡弹窗，避免浮在半空遮挡导航栏
+// 注意：如果是用户在弹窗内部滚动查看更多航班班次，坚决不关闭！
+function onPageScroll(e) {
+  if (!props.visible) return;
+  const pop = popoverRef.value;
+  if (pop && e.target && (e.target === pop || pop.contains(e.target))) {
+    return; // 内部滚动正常查看，不误关
+  }
+  emit('close');
+}
+
 onMounted(() => {
   window.addEventListener('resize', updatePosition);
-  window.addEventListener('scroll', updatePosition, true);
+  window.addEventListener('scroll', onPageScroll, true);
   document.addEventListener('mousedown', onGlobalClick);
 });
 
 onUnmounted(() => {
   window.removeEventListener('resize', updatePosition);
-  window.removeEventListener('scroll', updatePosition, true);
+  window.removeEventListener('scroll', onPageScroll, true);
   document.removeEventListener('mousedown', onGlobalClick);
 });
 </script>

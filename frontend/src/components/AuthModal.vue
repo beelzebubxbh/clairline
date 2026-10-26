@@ -350,9 +350,10 @@ function startPolling() {
         }
         emit('refresh-auth', res.auth);
         emit('synced');
+        // 瞬间丝滑过渡：400ms 快速关闭抓包框，立刻无缝拉起全屏发光雷达普查
         setTimeout(() => {
           closeModal();
-        }, 1800);
+        }, 400);
       } else if (res && res.status === 'error') {
         stopPolling();
         isCapturing.value = false;
