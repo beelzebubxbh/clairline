@@ -59,7 +59,18 @@
           <span class="btn-label-text login-text">同步长龙登录</span>
         </button>
 
-        <!-- 2. 航线监控按钮 -->
+        <!-- 2. 往返搜索按钮 -->
+        <button 
+          type="button" 
+          class="header-pill-btn roundtrip-pill"
+          @click="$emit('open-roundtrip')"
+          title="按去程/回程日期组合，一次筛出往返两程都有票的目的地"
+        >
+          <span class="btn-icon-wrap icon-emerald" v-html="ICONS.swap"></span>
+          <span class="btn-label-text">往返搜索</span>
+        </button>
+
+        <!-- 3. 航线监控按钮 -->
         <button 
           type="button" 
           class="header-pill-btn patrol-pill"
@@ -127,7 +138,7 @@ const props = defineProps({
   }
 });
 
-defineEmits(['update:currentTab', 'open-patrol', 'open-auth', 'open-update']);
+defineEmits(['update:currentTab', 'open-patrol', 'open-auth', 'open-update', 'open-roundtrip']);
 
 const headerLabel = computed(() => {
   if (!props.patrolState?.running) {
@@ -320,6 +331,7 @@ const headerLabel = computed(() => {
   color: #64748b;
 }
 
+.icon-emerald { color: var(--accent-emerald); }
 .icon-dark {
   color: #1e293b;
 }

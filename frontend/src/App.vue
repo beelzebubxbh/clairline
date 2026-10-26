@@ -9,6 +9,7 @@
       @open-patrol="handleOpenPatrol"
       @open-auth="openAuthModal(false)"
       @open-update="openUpdateModal"
+      @open-roundtrip="roundtripVisible = true"
     />
 
     <!-- 主体容器 (限制 1280px 居中) -->
@@ -98,6 +99,12 @@
       @hover-date="handleDateHover"
       @leave-date="handleDateLeave"
       @refresh-calendar="handleRefreshCalendar"
+    />
+
+    <!-- 往返组合搜索模态框 -->
+    <RoundTripSearch
+      :visible="roundtripVisible"
+      @close="roundtripVisible = false"
     />
 
     <!-- 航线监控与全网普查模态框 -->
@@ -197,6 +204,7 @@ import RouteCard from './components/RouteCard.vue';
 import SeatPopover from './components/SeatPopover.vue';
 import RouteDetailDrawer from './components/RouteDetailDrawer.vue';
 import PatrolModal from './components/PatrolModal.vue';
+import RoundTripSearch from './components/RoundTripSearch.vue';
 import AuthModal from './components/AuthModal.vue';
 import UpdateModal from './components/UpdateModal.vue';
 import FlightMap from './components/FlightMap.vue';
@@ -346,6 +354,7 @@ function startPatrolPolling() {
 const drawerVisible = ref(false);
 const selectedRoute = ref({});
 const patrolModalVisible = ref(false);
+const roundtripVisible = ref(false);
 const authModalVisible = ref(false);
 const autoStartCaptureOnOpen = ref(false);
 const updateModalVisible = ref(false);

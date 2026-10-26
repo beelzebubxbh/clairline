@@ -39,6 +39,8 @@ import db
 from seccard_client import SecCardClient, CITY_IATA, IATA_CITY
 from scheduler import MonitorScheduler
 from mac_auth import capture_mgr, install_root_cert, uninstall_root_cert, reset_user_auth
+import roundtrip
+from seccard_client import AuthExpired
 
 
 # 初始化本地 SQLite 数据库
@@ -176,6 +178,22 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed.query)
 
         # ----------------------------- API 路由
+        if path == "/api/roundtrip/cities":
+            try:
+                net = roundtrip.city_network()
+                lo, hi = roundtrip.bookable_window()
+                self.send_json({
+                    "ok": True,
+                    "origins": net["origins"],
+                    "routes": net["routes"],
+                    "counts": net["counts"],
+                    "bookableFrom": lo.isoformat(),
+                    "bookableTo": hi.isoformat(),
+                })
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         if path == "/api/status":
             self.send_json({
                 "ok": True,
@@ -482,7 +500,30 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             body = {}
 
-        if path == "/api/monitor/tasks":
+        if path == "/api/roundtrip/search":
+            try:
+                res = roundtrip.search(
+                    origin=body.get("from", ""),
+                    dest=body.get("to", "") or "",
+                    pairs=body.get("pairs") or [],
+                    out_after=body.get("outAfter", ""),
+                    out_before=body.get("outBefore", ""),
+                    ret_after=body.get("retAfter", ""),
+                    ret_before=body.get("retBefore", ""),
+                    limit=int(body.get("limit") or 60),
+                    detail=bool(body.get("detail")),
+                    detail_limit=int(body.get("detailLimit") or 6),
+                    min_seats=int(body.get("minSeats") or 1),
+                    client=client,
+                )
+                self.send_json(res)
+            except AuthExpired as e:
+                self.send_json({"ok": False, "authExpired": True, "error": str(e)}, 401)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        elif path == "/api/monitor/tasks":
             frm = body.get("from")
             to = body.get("to")
             date_str = body.get("date")
