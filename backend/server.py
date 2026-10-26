@@ -37,8 +37,74 @@ from capture_manager import capture_mgr, install_root_cert, uninstall_root_cert,
 db.init_db()
 
 PORT = 3000
+APP_VERSION = "v2.0.0"
+GITHUB_REPO = "eureka-wu/clairline"
 client = SecCardClient()
 scheduler = MonitorScheduler(client)
+
+def check_github_update():
+    """向 GitHub Releases API 检索最新版本与发布日志 (方案 A)"""
+    import urllib.request, re
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Clairline-Desktop",
+            "Accept": "application/vnd.github.v3+json"
+        })
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            latest_tag = data.get("tag_name", "").strip()
+
+            def parse_ver(v_str):
+                nums = re.findall(r"\d+", v_str)
+                return [int(x) for x in nums] if nums else [0]
+
+            curr_v = parse_ver(APP_VERSION)
+            latest_v = parse_ver(latest_tag)
+            has_update = latest_v > curr_v
+
+            # 寻找发布的 exe 附件直接下载链接
+            download_url = data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest")
+            for asset in data.get("assets", []):
+                name = asset.get("name", "")
+                if name.endswith(".exe"):
+                    download_url = asset.get("browser_download_url", download_url)
+                    break
+
+            return {
+                "ok": True,
+                "current_version": APP_VERSION,
+                "latest_version": latest_tag or APP_VERSION,
+                "has_update": has_update,
+                "release_name": data.get("name", latest_tag),
+                "release_notes": data.get("body", ""),
+                "page_url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
+                "download_url": download_url
+            }
+    except Exception as ex:
+        err_msg = str(ex)
+        # 核心防空处理：若 GitHub 仓库尚未正式发布 Release，GitHub API 会返回 404 Not Found
+        # 此时应判定为正常状态，当前即为最新版，绝不向用户弹报错 Toast
+        if "404" in err_msg or "Not Found" in err_msg:
+            return {
+                "ok": True,
+                "current_version": APP_VERSION,
+                "latest_version": APP_VERSION,
+                "has_update": False,
+                "release_name": "长龙航空畅飞助手 v2.0",
+                "release_notes": "当前已是官方最新版本，暂无新版本发布。",
+                "page_url": f"https://github.com/{GITHUB_REPO}/releases",
+                "download_url": f"https://github.com/{GITHUB_REPO}/releases"
+            }
+        return {
+            "ok": False,
+            "current_version": APP_VERSION,
+            "latest_version": APP_VERSION,
+            "has_update": False,
+            "error": err_msg,
+            "page_url": f"https://github.com/{GITHUB_REPO}/releases"
+        }
+
 
 class AppHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -320,6 +386,20 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                 "message": capture_mgr.message,
                 "last_capture_time": capture_mgr.last_capture_time,
                 "auth": auth_st
+            })
+            return
+
+        elif path == "/api/system/check-update":
+            update_info = check_github_update()
+            self.send_json(update_info)
+            return
+
+        elif path == "/api/system/info":
+            self.send_json({
+                "ok": True,
+                "version": APP_VERSION,
+                "github": f"https://github.com/{GITHUB_REPO}",
+                "repo": GITHUB_REPO
             })
             return
 

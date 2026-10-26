@@ -52,6 +52,7 @@ def build():
         "--onefile",
         "--windowed",
         "--name=LoongAirHelper",
+        f"--icon={ROOT_DIR / 'app_icon.ico'}",
         "--paths=backend",
         "--paths=.",
         f"--add-data={FRONTEND_DIST};frontend/dist",
@@ -83,16 +84,25 @@ def build():
         dist_dir = ROOT_DIR / "dist"
         en_exe = dist_dir / "LoongAirHelper.exe"
         cn_exe = dist_dir / "长龙航空畅飞助手.exe"
-        
-        # 复制生成中文名字的 Exe
-        if en_exe.exists():
-            shutil.copy2(en_exe, cn_exe)
+        target_exe = cn_exe
 
-        size_mb = cn_exe.stat().st_size / (1024 * 1024) if cn_exe.exists() else 0
+        # 直接保留中文名字的 Exe，移除英文过渡文件
+        if en_exe.exists():
+            try:
+                if cn_exe.exists():
+                    cn_exe.unlink()
+                shutil.move(str(en_exe), str(cn_exe))
+                target_exe = cn_exe
+            except PermissionError:
+                print("\n[!] 提示：检测到《长龙航空畅飞助手.exe》当前正在运行中（被 Windows 保护锁定）。")
+                print(f"[!] 最新构建好的版本已生成在: {en_exe}")
+                print("[!] 请先关闭正在运行的客户端窗口，再次运行 build_exe.py 或将该文件覆盖即可。")
+                target_exe = en_exe
+
+        size_mb = target_exe.stat().st_size / (1024 * 1024) if target_exe.exists() else 0
         print("\n" + "=" * 65)
         print("[SUCCESS] 打包圆满成功！")
-        print(f"[FILE] 中文版 Exe 路径: {cn_exe}")
-        print(f"[FILE] 英文版 Exe 路径: {en_exe}")
+        print(f"[FILE] 客户端 Exe 路径: {target_exe}")
         print(f"[INFO] 文件体积: {size_mb:.2f} MB")
         print("[TIP] 推荐发布方式：直接上传至 GitHub Releases (https://github.com/eureka-wu/clairline/releases)")
         print("=" * 65)

@@ -111,6 +111,16 @@ class SecCardClient:
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+
+            # 核心机制：每天北京时间 00:00 自动将凭证标记为过期清空 (微信小程序 Session 自然日失效)
+            up_time = data.get("update_time", "")
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            if up_time and up_time[:10] != today_str:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ 凭据更新于 {up_time[:10]}，已跨越北京时间 00:00 自然日失效周期，自动清空旧凭证，请同步最新长龙登录。")
+                self.headers = {}
+                self.template = {}
+                return
+
             headers = data.get("headers", {})
             params = data.get("search_template") or data.get("template", {})
             if headers:

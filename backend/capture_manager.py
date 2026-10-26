@@ -10,6 +10,7 @@ import json
 import time
 import subprocess
 import threading
+from datetime import datetime
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -123,6 +124,17 @@ class CaptureManager:
         is_logged_in = bool(profile.get("token"))
         update_time = profile.get("updated_at", "")
         auth = profile.get("token", "")
+
+        # 核心机制：每天北京时间 00:00 自动将凭证标记为过期清空
+        # 原因：微信小程序会话 Token 具有自然日生命周期，跨越 0 点后失效
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        if update_time and update_time[:10] != today_date:
+            print(f"[*] 提示：检测到长龙凭证更新日期为 {update_time[:10]}，已跨越北京时间 00:00 自然日周期（微信登录态已失效），自动清空过期凭据。")
+            reset_user_auth()
+            profile = {}
+            is_logged_in = False
+            update_time = ""
+            auth = ""
 
         # 如果 SQLite 库中尚未记录，则从 credentials.json 补充并同步进 SQLite
         if not is_logged_in and CRED_FILE.exists():

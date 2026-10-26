@@ -5,8 +5,10 @@
       v-model:currentTab="currentTab"
       :patrol-state="patrolState"
       :auth-status="authStatus"
+      :update-info="updateInfo"
       @open-patrol="patrolModalVisible = true"
       @open-auth="authModalVisible = true"
+      @open-update="openUpdateModal"
     />
 
     <!-- 主体容器 (限制 1280px 居中) -->
@@ -116,6 +118,14 @@
       @refresh-auth="refreshAuthStatus"
     />
 
+    <!-- 软件检查更新与版本发布模态框 (方案 A) -->
+    <UpdateModal 
+      :visible="updateModalVisible"
+      :update-info="updateInfo"
+      @close="updateModalVisible = false"
+      @ignore-version="handleIgnoreVersion"
+    />
+
     <!-- 悬浮 Toast 轻提示 -->
     <div v-if="toast.visible" class="app-toast-box">
       <span>{{ toast.message }}</span>
@@ -132,11 +142,13 @@ import SeatPopover from './components/SeatPopover.vue';
 import RouteDetailDrawer from './components/RouteDetailDrawer.vue';
 import PatrolModal from './components/PatrolModal.vue';
 import AuthModal from './components/AuthModal.vue';
+import UpdateModal from './components/UpdateModal.vue';
 import FlightMap from './components/FlightMap.vue';
 
 import { fetchAvailableRoutes, queryLiveFlights, refreshRouteCalendar } from './api/flights.js';
 import { fetchPatrolHotRoutes, fetchPatrolStatus } from './api/patrol.js';
 import { fetchAuthStatus } from './api/auth.js';
+import { checkSystemUpdate } from './api/system.js';
 import { DIRECT_MAP } from './data/routes-network.js';
 import { CITY_METADATA } from './data/city-meta.js';
 import { ICONS } from './data/icons.js';
@@ -229,6 +241,70 @@ const drawerVisible = ref(false);
 const selectedRoute = ref({});
 const patrolModalVisible = ref(false);
 const authModalVisible = ref(false);
+const updateModalVisible = ref(false);
+
+const updateInfo = ref({
+  has_update: false,
+  current_version: 'v2.0.0',
+  latest_version: 'v2.0.0',
+  release_name: '',
+  release_notes: '',
+  page_url: 'https://github.com/eureka-wu/clairline/releases',
+  download_url: 'https://github.com/eureka-wu/clairline/releases'
+});
+
+async function runCheckUpdate(manual = false) {
+  try {
+    const res = await checkSystemUpdate();
+    if (res && res.ok) {
+      updateInfo.value = res;
+      const ignored = localStorage.getItem('ignored_update_version');
+      if (res.has_update) {
+        if (!manual && ignored === res.latest_version) {
+          return;
+        }
+        if (manual) {
+          updateModalVisible.value = true;
+        }
+      } else {
+        if (manual) {
+          updateModalVisible.value = true;
+        }
+      }
+    } else if (manual) {
+      updateInfo.value = {
+        has_update: false,
+        current_version: 'v2.0.0',
+        latest_version: 'v2.0.0',
+        release_name: '长龙航空畅飞助手 v2.0',
+        release_notes: '当前已是最新发布版本，暂无新版本发布。可访问 GitHub 开源仓库获取最新动态。',
+        page_url: 'https://github.com/eureka-wu/clairline/releases'
+      };
+      updateModalVisible.value = true;
+    }
+  } catch (e) {
+    if (manual) {
+      updateInfo.value = {
+        has_update: false,
+        current_version: 'v2.0.0',
+        latest_version: 'v2.0.0',
+        release_name: '长龙航空畅飞助手 v2.0',
+        release_notes: '当前已是最新发布版本。',
+        page_url: 'https://github.com/eureka-wu/clairline/releases'
+      };
+      updateModalVisible.value = true;
+    }
+  }
+}
+
+function openUpdateModal() {
+  runCheckUpdate(true);
+}
+
+function handleIgnoreVersion(ver) {
+  showToast(`已跳过 ${ver} 的更新提示`);
+}
+
 
 const authStatus = ref({
   is_logged_in: false,
@@ -254,6 +330,10 @@ async function refreshAuthStatus(directData) {
 
 function handleAuthSynced() {
   showToast('长龙会员登录成功！已自动存入个人数据库');
+  refreshAuthStatus();
+  // 消除长龙官方接口 0.5 秒异步网络时序差：延迟 800ms 与 1800ms 静默刷新，100% 自动显示真实姓名
+  setTimeout(refreshAuthStatus, 800);
+  setTimeout(refreshAuthStatus, 1800);
   initData();
 }
 
@@ -600,6 +680,7 @@ onMounted(() => {
   initData();
   checkPatrolStatus();
   refreshAuthStatus();
+  runCheckUpdate(false);
 });
 
 </script>
