@@ -44,15 +44,16 @@ def build():
     else:
         print("[+] 航网直飞种子数据已就绪")
 
-    # 3. 构造 PyInstaller 命令行
+    # 3. 构造 PyInstaller 命令行 (直接生成中文可执行文件并注入高清 Logo 图标)
+    icon_path = ROOT_DIR / "app_icon.ico"
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
         "--onefile",
         "--windowed",
-        "--name=LoongAirHelper",
-        f"--icon={ROOT_DIR / 'app_icon.ico'}",
+        "--name=长龙航空畅飞助手",
+        f"--icon={icon_path}",
         "--paths=backend",
         "--paths=.",
         f"--add-data={FRONTEND_DIST};frontend/dist",
@@ -82,27 +83,26 @@ def build():
     res = subprocess.run(cmd, cwd=str(ROOT_DIR))
     if res.returncode == 0:
         dist_dir = ROOT_DIR / "dist"
-        en_exe = dist_dir / "LoongAirHelper.exe"
         cn_exe = dist_dir / "长龙航空畅飞助手.exe"
-        target_exe = cn_exe
+        en_exe = dist_dir / "LoongAirHelper.exe"
 
-        # 直接保留中文名字的 Exe，移除英文过渡文件
-        if en_exe.exists():
-            try:
-                if cn_exe.exists():
-                    cn_exe.unlink()
-                shutil.move(str(en_exe), str(cn_exe))
-                target_exe = cn_exe
-            except PermissionError:
-                print("\n[!] 提示：检测到《长龙航空畅飞助手.exe》当前正在运行中（被 Windows 保护锁定）。")
-                print(f"[!] 最新构建好的版本已生成在: {en_exe}")
-                print("[!] 请先关闭正在运行的客户端窗口，再次运行 build_exe.py 或将该文件覆盖即可。")
-                target_exe = en_exe
+        # 同时也保留一份英文名称镜像供全球化/备用需求
+        try:
+            shutil.copy2(str(cn_exe), str(en_exe))
+        except Exception:
+            pass
 
-        size_mb = target_exe.stat().st_size / (1024 * 1024) if target_exe.exists() else 0
+        # 强制通知 Windows 资源管理器即时刷新图标缓存
+        try:
+            import ctypes
+            ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)
+        except Exception:
+            pass
+
+        size_mb = cn_exe.stat().st_size / (1024 * 1024) if cn_exe.exists() else 0
         print("\n" + "=" * 65)
         print("[SUCCESS] 打包圆满成功！")
-        print(f"[FILE] 客户端 Exe 路径: {target_exe}")
+        print(f"[FILE] 客户端 Exe 路径: {cn_exe}")
         print(f"[INFO] 文件体积: {size_mb:.2f} MB")
         print("[TIP] 推荐发布方式：直接上传至 GitHub Releases (https://github.com/eureka-wu/clairline/releases)")
         print("=" * 65)

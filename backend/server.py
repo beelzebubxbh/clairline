@@ -17,10 +17,18 @@ if hasattr(sys.stdout, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception: pass
 
-BACKEND_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = BACKEND_DIR.parent
-FRONTEND_DIR = PROJECT_DIR / "frontend"
-DIST_DIR = FRONTEND_DIR / "dist"
+if getattr(sys, "frozen", False):
+    BUNDLE_DIR = Path(sys._MEIPASS).resolve()
+    BACKEND_DIR = BUNDLE_DIR / "backend"
+    PROJECT_DIR = BUNDLE_DIR
+    FRONTEND_DIR = BUNDLE_DIR / "frontend"
+    DIST_DIR = FRONTEND_DIR / "dist"
+else:
+    BACKEND_DIR = Path(__file__).resolve().parent
+    PROJECT_DIR = BACKEND_DIR.parent
+    FRONTEND_DIR = PROJECT_DIR / "frontend"
+    DIST_DIR = FRONTEND_DIR / "dist"
+
 STATIC_DIR = DIST_DIR if DIST_DIR.exists() else FRONTEND_DIR
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -118,7 +126,9 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             import traceback
             traceback.print_exc()
-            sys.stdout.flush()
+            if sys.stdout and hasattr(sys.stdout, "flush"):
+                try: sys.stdout.flush()
+                except Exception: pass
 
     def address_string(self):
         try:
@@ -134,8 +144,13 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
         # 静音高频的心跳状态轮询日志，避免控制台刷屏打扰用户
         if "/api/patrol/status" in msg or "/api/status" in msg:
             return
-        sys.stdout.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-        sys.stdout.flush()
+        if sys.stdout and hasattr(sys.stdout, "write"):
+            try:
+                sys.stdout.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+                if hasattr(sys.stdout, "flush"):
+                    sys.stdout.flush()
+            except Exception:
+                pass
 
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -635,7 +650,11 @@ def run():
     print(f"📡 实时 API 就绪: http://localhost:{PORT}/api/status")
     print(f"🛡️ 后台自动轮询: 已彻底关闭 (仅响应用户前端点击与按需查票)")
     print("=======================================================\n")
-    sys.stdout.flush()
+    if sys.stdout and hasattr(sys.stdout, "flush"):
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -16,6 +16,28 @@ import time
 import threading
 from pathlib import Path
 
+LOG_PATH = Path.home() / "Desktop" / "clairline_boot.log"
+
+class SafeWriter:
+    def __init__(self, target_file=None):
+        self.target_file = target_file
+    def write(self, s):
+        if self.target_file and s:
+            try:
+                with open(self.target_file, "a", encoding="utf-8", errors="replace") as f:
+                    f.write(s)
+            except Exception:
+                pass
+    def flush(self):
+        pass
+    def reconfigure(self, *args, **kwargs):
+        pass
+
+if sys.stdout is None:
+    sys.stdout = SafeWriter(LOG_PATH)
+if sys.stderr is None:
+    sys.stderr = SafeWriter(LOG_PATH)
+
 # 兼容普通运行与 PyInstaller 打包环境
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS).resolve()
@@ -46,70 +68,126 @@ except ImportError:
 GITHUB_REPO_URL = "https://github.com/eureka-wu/clairline"
 APP_TITLE = "长龙航空 · 畅飞智能助手 v2.0 (GitHub: eureka-wu/clairline)"
 
+def boot_log(msg: str):
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+def find_free_port(start_port: int = 3000, max_tries: int = 30) -> int:
+    """动态探测可用未占用端口，彻底避免端口冲突导致闪退"""
+    import socket
+    for p in range(start_port, start_port + max_tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('127.0.0.1', p))
+                boot_log(f"find_free_port allocated port: {p}")
+                return p
+            except OSError:
+                continue
+    return start_port
+
+def show_fatal_error(msg: str):
+    """当发生严重致命异常时，弹出 Windows 原生错误对话框并落盘日志，绝不静默闪退"""
+    import ctypes
+    boot_log(f"FATAL ERROR POPUP: {msg}")
+    title = "长龙航空畅飞助手 - 运行异常"
+    try:
+        ctypes.windll.user32.MessageBoxW(0, msg, title, 0x10)
+    except Exception:
+        pass
+
 def start_backend_server(port: int = 3000):
     """在后台线程中启动前后端一体化 HTTP 服务"""
+    boot_log(f"start_backend_server thread entered, target port={port}")
     try:
         server.PORT = port
+        boot_log("calling server.run()...")
         server.run()
+        boot_log("server.run() terminated.")
     except Exception as e:
-        print(f"[!] 后端服务异常: {e}", flush=True)
+        import traceback
+        err = f"后端服务启动异常崩溃: {e}\n\n{traceback.format_exc()}"
+        boot_log(err)
+        show_fatal_error(err)
 
-def wait_for_server(port: int = 3000, timeout: float = 5.0) -> bool:
-    """等待本地后端 HTTP 服务端口就绪"""
+def wait_for_server(port: int = 3000, timeout: float = 12.0) -> bool:
+    """等待本地后端 HTTP 服务端口就绪，冷启动解压与引擎初始化给予充足时间"""
     import urllib.request
     start = time.time()
     url = f"http://127.0.0.1:{port}/api/status"
+    boot_log(f"wait_for_server polling {url} (max timeout={timeout}s)...")
     while time.time() - start < timeout:
         try:
             with urllib.request.urlopen(url, timeout=0.8) as resp:
                 if resp.status == 200:
+                    boot_log(f"wait_for_server SUCCESS in {time.time() - start:.2f}s!")
                     return True
         except Exception:
-            time.sleep(0.15)
+            time.sleep(0.2)
+    boot_log(f"wait_for_server TIMEOUT after {timeout}s!")
     return False
 
 def on_closed():
     """桌面窗口关闭时的退出清理 Hook"""
+    boot_log("on_closed triggered, performing cleanup...")
     print("[*] 桌面客户端正在关闭，执行安全退出与代理还原...", flush=True)
     cleanup_proxy_if_needed()
     # 强制退出所有常驻守护线程
     os._exit(0)
 
 def main():
-    # 1. 初始化数据库与种子航线拓扑
+    boot_log("=== main() entered ===")
     try:
-        db.init_db()
-    except Exception as ex:
-        print(f"[*] 数据库初始化提示: {ex}")
+        # 1. 初始化数据库与种子航线拓扑
+        try:
+            db.init_db()
+            boot_log("db.init_db() done")
+        except Exception as ex:
+            boot_log(f"db.init_db() warning: {ex}")
+            print(f"[*] 数据库初始化提示: {ex}")
 
-    # 2. 检查并确保系统代理在冷启动时处于关闭正常直连状态
-    cleanup_proxy_if_needed()
+        # 2. 检查并确保系统代理在冷启动时处于关闭正常直连状态
+        cleanup_proxy_if_needed()
+        boot_log("cleanup_proxy_if_needed() done")
 
-    # 3. 启动后台 HTTP 服务
-    port = 3000
-    server_thread = threading.Thread(target=start_backend_server, args=(port,), daemon=True)
-    server_thread.start()
+        # 3. 动态分配空闲可用端口（优先 3000，若占用自动向后探测）
+        port = find_free_port(3000)
 
-    ready = wait_for_server(port)
-    if not ready:
-        print(f"[!] 警告：后端服务启动较慢，继续拉起桌面窗口...")
+        # 4. 启动后台 HTTP 服务
+        server_thread = threading.Thread(target=start_backend_server, args=(port,), daemon=True)
+        server_thread.start()
+        boot_log(f"server_thread.start() executed for port {port}")
 
-    # 4. 拉起 WebView2 桌面窗口
-    import webview
+        ready = wait_for_server(port)
+        if not ready:
+            err_msg = f"本地后端服务引擎在 12 秒内未能成功就绪 (端口 {port})。\n请查看桌面 clairline_boot.log 日志定位具体原因。"
+            show_fatal_error(err_msg)
+            sys.exit(1)
 
-    window = webview.create_window(
-        title=APP_TITLE,
-        url=f"http://127.0.0.1:{port}",
-        width=1380,
-        height=880,
-        min_size=(1080, 680),
-        text_select=True,
-        zoomable=True
-    )
-    window.events.closed += on_closed
+        # 5. 拉起 WebView2 桌面窗口
+        boot_log("Importing webview and creating window...")
+        import webview
 
-    # 使用 Edge Chromium (WebView2) 引擎
-    webview.start(gui="edgechromium", debug=False)
+        window = webview.create_window(
+            title=APP_TITLE,
+            url=f"http://127.0.0.1:{port}",
+            width=1380,
+            height=880,
+            min_size=(1080, 680),
+            text_select=True,
+            zoomable=True
+        )
+        window.events.closed += on_closed
+
+        # 使用 Edge Chromium (WebView2) 引擎
+        webview.start(gui="edgechromium", debug=False)
+    except Exception:
+        import traceback
+        err_msg = "长龙航空畅飞助手在启动时遭遇未知异常：\n\n" + traceback.format_exc()
+        show_fatal_error(err_msg)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

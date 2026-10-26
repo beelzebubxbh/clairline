@@ -13,18 +13,19 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from . import db
+except Exception:
+    import db
+
 BACKEND_DIR = Path(__file__).resolve().parent
-DATA_DIR = BACKEND_DIR / "data"
+DATA_DIR = getattr(db, "DATA_DIR", BACKEND_DIR / "data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 CRED_FILE = DATA_DIR / "credentials.json"
 ADDON_PATH = BACKEND_DIR / "capture_addon.py"
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
-
-try:
-    from . import db
-except Exception:
-    import db
 
 
 def mask_mobile(m: str) -> str:

@@ -81,9 +81,22 @@ class SecCardClient:
 
     def detect_credentials_source(self) -> tuple[str, Path] | None:
         """优先检测 credentials.json（mitmproxy 自动嗅探生成），其次检测 cl.saz"""
-        json_cand = BACKEND_DIR / "data" / "credentials.json"
-        if json_cand.exists():
-            return ("json", json_cand)
+        try:
+            import db
+            db_data_dir = getattr(db, "DATA_DIR", None)
+        except Exception:
+            db_data_dir = None
+
+        candidates = []
+        if db_data_dir:
+            candidates.append(db_data_dir / "credentials.json")
+        candidates.append(BACKEND_DIR / "data" / "credentials.json")
+        candidates.append(PROJECT_DIR / "credentials.json")
+
+        for c in candidates:
+            if c.exists():
+                return ("json", c)
+
         saz = self.detect_saz_path()
         if saz:
             return ("saz", saz)
