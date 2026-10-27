@@ -778,7 +778,7 @@ async function handleDateClick({ from, to, date, targetEl }) {
     popover.value.visible = true;
     if (e && e.authExpired) {
       window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
-      showToast('登录态已失效，请点右上角重新登录');
+      showToast('登录态已失效（小程序登录会顶掉网页端），请点右上角重新登录');
     } else {
       showToast('查询航班异常，请重试');
     }
@@ -867,7 +867,7 @@ function openDrawer(route) {
 // 登录态失效统一处理：刷新状态（头部会切回「同步长龙登录」）并提示
 function handleAuthExpired() {
   refreshAuthStatus();
-  showToast('登录态已失效，请点右上角重新用手机验证码登录');
+  showToast('登录态已失效（小程序登录会顶掉网页端），请点右上角重新登录');
 }
 if (typeof window !== 'undefined') {
   window.addEventListener('clairline:auth-expired', handleAuthExpired);

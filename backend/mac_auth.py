@@ -72,7 +72,7 @@ def clear_expired():
         EXPIRED_FLAG.unlink(missing_ok=True)
     except Exception:
         pass
-REFRESH_HINT = "登录态已失效：请点击页面右上角的会员胶囊，用手机号 + 短信验证码重新登录。"
+REFRESH_HINT = "登录态已失效：点击右上角会员胶囊，用手机号 + 短信验证码重新登录。注意：在微信小程序里打开长龙也会顶掉这里的会话。"
 
 
 def _load_cred_file() -> dict:
@@ -154,7 +154,7 @@ class MacCaptureManager:
             self.message = "尚未登录"
         elif expired:
             self.status = "expired"
-            self.message = "登录态已过期，请重新用手机验证码登录"
+            self.message = "登录态已失效（在微信小程序里登录会顶掉网页端会话），请重新登录"
         else:
             self.status = "success"
             self.message = f"已登录（{captured_at or '未知时间'}）"

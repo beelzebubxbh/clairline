@@ -296,7 +296,7 @@ class SecCardClient:
         try:
             import mac_auth
             if mac_auth.is_marked_expired():
-                raise AuthExpired("登录态已过期：请点击右上角用手机验证码重新登录")
+                raise AuthExpired("登录态已失效：如果刚在微信小程序里打开过长龙，网页端的会话会被顶掉。请点右上角重新登录")
         except AuthExpired:
             raise
         except Exception:
@@ -359,7 +359,7 @@ class SecCardClient:
                     return self.call_api(method, params, retry_on_auth_err=False)
                 self.check_and_reload(force=True)
                 return self.call_api(method, params, retry_on_auth_err=False)
-            raise AuthExpired("登录态已过期（100001）：请点击右上角用手机验证码重新登录")
+            raise AuthExpired("登录态已失效（100001）：可能刚在微信小程序里登录过，会话被顶掉了。请点右上角重新登录")
 
         if payload.get("ErrorCode") != 0:
             raise RuntimeError(f"长龙接口错误 ({payload.get('ErrorCode')}): {payload.get('message')}")

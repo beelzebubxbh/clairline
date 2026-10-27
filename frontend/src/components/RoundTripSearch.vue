@@ -310,7 +310,7 @@ async function runSearch() {
   } catch (e) {
     if (e.authExpired) {
       window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
-      error.value = '登录态已失效，请点右上角「同步长龙登录」，用手机验证码重新登录一次';
+      error.value = '登录态已失效（在微信小程序里登录会顶掉网页端会话），请点右上角重新登录';
     } else {
       error.value = e.message || '搜索失败';
     }
@@ -358,7 +358,7 @@ async function runEnrich(seq) {
   } catch (e) {
     if (e.authExpired) {
       window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
-      error.value = '登录态已失效，请点右上角「同步长龙登录」，用手机验证码重新登录一次';
+      error.value = '登录态已失效（在微信小程序里登录会顶掉网页端会话），请点右上角重新登录';
     } else {
       error.value = '补齐航班明细失败：' + (e.message || '');
     }
