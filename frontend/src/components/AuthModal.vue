@@ -32,7 +32,7 @@
           </div>
 
           <div class="am-note">
-            登录态失效时会先用 refreshToken 自动续期；续期也失败才需要重新登录。
+            登录态失效后需要重新用手机验证码登录一次。程序会先尝试自动续期，但官方未公开该接口，不保证成功。
           </div>
 
           <div class="am-actions">

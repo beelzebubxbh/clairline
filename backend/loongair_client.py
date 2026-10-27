@@ -323,9 +323,17 @@ def refresh_access_token() -> dict:
         "language": "zh-cn",
     }
 
-    res = _post("/user/clientNoLogin/channel/refreshToken", params, _base_headers())
+    # 说明：官方并未公开续期方法名。以下两个路径是社区流传的写法，
+    # 实测网关均返回 Not Found（内部路由不存在），所以续期大概率不会成功。
+    # 保留这段是为了「万一将来官方放开」以及避免静默异常，失败时由上层提示重新登录。
+    res = None
+    for method in ("/user/clientNoLogin/channel/refreshToken",
+                   "/user/client/channel/refreshToken"):
+        res = _post(method, params, _base_headers())
+        if res and res.get("ErrorCode") == 0:
+            break
     if not res or res.get("ErrorCode") != 0:
-        return {"ok": False, "error": (res or {}).get("message") or "续期失败"}
+        return {"ok": False, "error": (res or {}).get("message") or "官方未开放续期接口"}
 
     result = _safe_parse_result(res) or {}
     token = result.get("loongairToken") or result.get("token") or ""
