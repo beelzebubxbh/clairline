@@ -536,6 +536,24 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_api_error(e)
             return
 
+        elif path == "/api/roundtrip/enrich":
+            # 渐进式补明细：前端先渲染日历级结果，再分批补航班与余票
+            try:
+                res = roundtrip.enrich(
+                    client,
+                    db.normalize_city(body.get("from", "")),
+                    body.get("items") or [],
+                    out_after=body.get("outAfter", ""),
+                    out_before=body.get("outBefore", ""),
+                    ret_after=body.get("retAfter", ""),
+                    ret_before=body.get("retBefore", ""),
+                    min_seats=int(body.get("minSeats") or 1),
+                )
+                self.send_json(res)
+            except Exception as e:
+                self.send_api_error(e)
+            return
+
         elif path == "/api/monitor/tasks":
             frm = body.get("from")
             to = body.get("to")

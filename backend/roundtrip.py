@@ -213,66 +213,110 @@ def search(origin: str, dest: str = "", pairs: list | None = None,
     }
 
 
+def _attach_one(client, origin, item, oa, ob, ra, rb, min_seats):
+    """给单个目的地补上去程/回程的航班与余票。返回 (ok, skipped_window, failed)"""
+    lo, hi = bookable_window()
+    skipped = failed = 0
+    dest = item["to"]
+
+    for leg, (frm, to) in (("out", (origin, dest)), ("ret", (dest, origin))):
+        d = _parse_date(item[leg]["date"])
+        if not d or d < lo or d > hi:
+            skipped += 1
+            item[leg]["flights"] = []
+            item[leg]["note"] = "超出 3~30 天查询窗口，只能确认日历有票、看不到具体航班"
+            continue
+
+        f_from = db.normalize_iata(frm)
+        f_to = db.normalize_iata(to)
+        try:
+            flights = client.search_flights(f_from, f_to, item[leg]["date"]) or []
+        except AuthExpired:
+            raise
+        except Exception as e:
+            failed += 1
+            item[leg]["note"] = f"查询失败：{str(e)[:60]}"
+            flights = []
+
+        if leg == "out":
+            keep = [f for f in flights
+                    if _in_window(f.get("depTime", ""), oa, ob)
+                    and int(f.get("secCardLeft", 0) or 0) >= min_seats]
+        else:
+            keep = [f for f in flights
+                    if _in_window(f.get("depTime", ""), ra, rb)
+                    and int(f.get("secCardLeft", 0) or 0) >= min_seats]
+        item[leg]["flights"] = keep
+
+    try:
+        op = min([float(f.get("redeemPrice", 0) or 0) for f in item["out"]["flights"]], default=0)
+        rp = min([float(f.get("redeemPrice", 0) or 0) for f in item["ret"]["flights"]], default=0)
+        if op and rp:
+            item["totalPrice"] = round(op + rp, 2)
+    except Exception:
+        pass
+
+    item["enriched"] = True
+    return True, skipped, failed
+
+
 def attach_flights(client, origin, results, out_after, out_before,
                    ret_after, ret_before, min_seats) -> dict:
-    """实际实现：由 server.py 传入已初始化的 SecCardClient"""
-    lo, hi = bookable_window()
+    """批量补航班：串行处理，每批若干条"""
     oa, ob = _hhmm(out_after), _hhmm(out_before)
     ra, rb = _hhmm(ret_after), _hhmm(ret_before)
 
-    done = 0
-    skipped_out_of_window = 0
-    failed = 0
-
+    done = skipped_total = failed_total = 0
     for item in results:
-        dest = item["to"]
-        for leg, (frm, to) in (("out", (origin, dest)), ("ret", (dest, origin))):
-            d = _parse_date(item[leg]["date"])
-            if not d or d < lo or d > hi:
-                skipped_out_of_window += 1
-                item[leg]["flights"] = []
-                item[leg]["note"] = "超出 3~30 天查询窗口，只能确认日历有票、看不到具体航班"
-                continue
-            # 方向：out 是 A→B，ret 是 B→A
-            f_from = db.normalize_iata(frm)
-            f_to = db.normalize_iata(to)
-            try:
-                flights = client.search_flights(f_from, f_to, item[leg]["date"]) or []
-                done += 1
-            except AuthExpired:
-                raise
-            except Exception as e:
-                failed += 1
-                item[leg]["note"] = f"查询失败：{str(e)[:60]}"
-                flights = []
-
-            if leg == "out":
-                keep = [f for f in flights
-                        if _in_window(f.get("depTime", ""), oa, ob)
-                        and int(f.get("secCardLeft", 0) or 0) >= min_seats]
-            else:
-                keep = [f for f in flights
-                        if _in_window(f.get("depTime", ""), ra, rb)
-                        and int(f.get("secCardLeft", 0) or 0) >= min_seats]
-            item[leg]["flights"] = keep
-
-        # 最低总价（两程可兑价格之和）
-        try:
-            op = min([float(f.get("redeemPrice", 0) or 0) for f in item["out"]["flights"]], default=0)
-            rp = min([float(f.get("redeemPrice", 0) or 0) for f in item["ret"]["flights"]], default=0)
-            if op and rp:
-                item["totalPrice"] = round(op + rp, 2)
-        except Exception:
-            pass
+        _, sk, fa = _attach_one(client, origin, item, oa, ob, ra, rb, min_seats)
+        done += 2
+        skipped_total += sk
+        failed_total += fa
 
     note = ""
-    if skipped_out_of_window:
-        note = (f"{skipped_out_of_window} 个日期超出 3~30 天查询窗口，"
+    if skipped_total:
+        note = (f"{skipped_total} 个日期超出 3~30 天查询窗口，"
                 f"这部分只确认了日历有票、没有具体航班时刻。")
-    if failed:
-        note += f" {failed} 次航班查询失败。"
+    if failed_total:
+        note += f" {failed_total} 次航班查询失败。"
     return {
         "detail": True,
         "detail_note": note,
         "detail_queries": done,
+    }
+
+
+def enrich(client, origin, items, out_after: str = "", out_before: str = "",
+           ret_after: str = "", ret_before: str = "", min_seats: int = 1) -> dict:
+    """
+    渐进式补明细：前端拿到日历级结果先渲染，再分批调用本函数补齐航班与余票。
+
+    items: [{"to": "哈尔滨", "out": {"date": "..."}, "ret": {"date": "..."}}, ...]
+    """
+    if client is None:
+        return {"ok": False, "error": "服务未就绪"}
+
+    oa, ob = _hhmm(out_after), _hhmm(out_before)
+    ra, rb = _hhmm(ret_after), _hhmm(ret_before)
+
+    out = []
+    skipped = failed = 0
+    for raw in items[:10]:  # 单批最多 10 条，避免单次请求过久
+        item = {
+            "to": raw.get("to", ""),
+            "out": {"date": raw.get("out", ""), "flights": []},
+            "ret": {"date": raw.get("ret", ""), "flights": []},
+        }
+        if not item["to"]:
+            continue
+        _, sk, fa = _attach_one(client, origin, item, oa, ob, ra, rb, min_seats)
+        skipped += sk
+        failed += fa
+        out.append(item)
+
+    return {
+        "ok": True,
+        "items": out,
+        "skippedWindow": skipped,
+        "failed": failed,
     }

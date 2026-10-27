@@ -89,7 +89,7 @@
           <div class="rt-row rt-actions">
             <label class="rt-check">
               <input type="checkbox" v-model="withDetail" />
-              同时查询具体航班与余票（较慢，仅 3~30 天内有效）
+              搜索后自动补齐航班号与余票（上次顺序分批查询）
             </label>
             <button class="rt-search" :disabled="loading" @click="runSearch">
               {{ loading ? '搜索中…' : '搜索有票往返' }}
@@ -127,6 +127,10 @@
             <div class="rt-summary">
               <strong>{{ origin }}</strong> 出发 · 命中 <strong>{{ data.count }}</strong> 个目的地
               <span v-if="data.totalCached > data.count">（共 {{ data.totalCached }} 个，已截断）</span>
+              <span v-if="enriching" class="rt-enriching">
+                <span class="rt-dot"></span>正在补齐航班明细 {{ enrichDone }}/{{ enrichTotal }}
+              </span>
+              <span v-else-if="enrichTotal > 0" class="rt-enrich-done">明细已补齐</span>
               <span v-if="data.detail_note" class="rt-note">{{ data.detail_note }}</span>
             </div>
 
@@ -156,7 +160,11 @@
                     </div>
                   </div>
                   <div v-else class="rt-leg-note">
-                    {{ r[leg].note || '日历显示有票（勾选"查询具体航班"可看时刻与余量）' }}
+                    <template v-if="r[leg].note">{{ r[leg].note }}</template>
+                    <template v-else-if="!r.enriched && enriching">
+                      <span class="rt-dot"></span>正在查询航班…
+                    </template>
+                    <template v-else>日历显示有票（未查到具体航班）</template>
                   </div>
                 </div>
               </div>
@@ -170,7 +178,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
-import { fetchRoundtripCities, searchRoundtrip } from '../api/roundtrip.js';
+import { fetchRoundtripCities, searchRoundtrip, enrichRoundtrip } from '../api/roundtrip.js';
 
 const props = defineProps({ visible: { type: Boolean, default: false } });
 const emit = defineEmits(['close']);
@@ -204,6 +212,10 @@ const loading = ref(false);
 const searched = ref(false);
 const error = ref('');
 const data = ref(null);
+const enriching = ref(false);
+const enrichDone = ref(0);
+const enrichTotal = ref(0);
+let searchSeq = 0;
 const results = computed(() => data.value?.results || []);
 const destinations = computed(() => routes.value[origin.value] || []);
 const hasTimeFilter = computed(() => !!(outAfter.value || outBefore.value || retAfter.value || retBefore.value));
@@ -277,6 +289,7 @@ async function runSearch() {
   loading.value = true;
   error.value = '';
   try {
+    // 第一段：只查日历（毫秒级），先把「哪些目的地有票」渲染出来
     data.value = await searchRoundtrip({
       from: origin.value,
       to: dest.value,
@@ -285,10 +298,15 @@ async function runSearch() {
       outBefore: outBefore.value,
       retAfter: retAfter.value,
       retBefore: retBefore.value,
-      detail: withDetail.value,
-      detailLimit: 8
+      detail: false
     });
     searched.value = true;
+    const seq = ++searchSeq;
+
+    // 第二段：分批补航班与余票，逐条刷新到界面上
+    if (withDetail.value && (data.value.results || []).length) {
+      runEnrich(seq);
+    }
   } catch (e) {
     if (e.authExpired) {
       window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
@@ -298,6 +316,54 @@ async function runSearch() {
     }
   } finally {
     loading.value = false;
+  }
+}
+
+async function runEnrich(seq) {
+  const list = data.value?.results || [];
+  const pending = list.filter(r => !r.enriched);
+  if (!pending.length) return;
+
+  enriching.value = true;
+  enrichTotal.value = pending.length;
+  enrichDone.value = 0;
+
+  const BATCH = 4;
+  try {
+    for (let i = 0; i < pending.length; i += BATCH) {
+      if (seq !== searchSeq) return; // 用户已发起新搜索，放弃当前批次
+      const batch = pending.slice(i, i + BATCH);
+      const res = await enrichRoundtrip({
+        from: origin.value,
+        items: batch.map(r => ({ to: r.to, out: r.out.date, ret: r.ret.date })),
+        outAfter: outAfter.value,
+        outBefore: outBefore.value,
+        retAfter: retAfter.value,
+        retBefore: retBefore.value
+      });
+      if (seq !== searchSeq) return;
+
+      for (const item of (res.items || [])) {
+        const target = list.find(r => r.to === item.to);
+        if (!target) continue;
+        target.out = { ...target.out, ...item.out };
+        target.ret = { ...target.ret, ...item.ret };
+        if (item.totalPrice) target.totalPrice = item.totalPrice;
+        target.enriched = true;
+      }
+      enrichDone.value = Math.min(enrichDone.value + batch.length, enrichTotal.value);
+      // 触发视图更新
+      data.value = { ...data.value, results: [...list] };
+    }
+  } catch (e) {
+    if (e.authExpired) {
+      window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
+      error.value = '登录态已失效，请点右上角「同步长龙登录」，用手机验证码重新登录一次';
+    } else {
+      error.value = '补齐航班明细失败：' + (e.message || '');
+    }
+  } finally {
+    enriching.value = false;
   }
 }
 
@@ -395,6 +461,13 @@ onMounted(() => { if (props.visible) loadCities(); });
   display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline;
 }
 .rt-note { color: var(--text-dim); font-size: 0.74rem; }
+.rt-enriching { color: var(--accent-cyan); font-size: 0.75rem; display: inline-flex; align-items: center; gap: 6px; }
+.rt-enrich-done { color: var(--accent-emerald); font-size: 0.75rem; }
+.rt-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  display: inline-block; animation: rt-pulse 1s ease-in-out infinite;
+}
+@keyframes rt-pulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
 
 .rt-card {
   border: 1px solid var(--border-subtle); border-radius: var(--radius-md);

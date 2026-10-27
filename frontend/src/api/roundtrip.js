@@ -22,3 +22,18 @@ export async function searchRoundtrip(payload) {
   }
   return data;
 }
+/** 渐进式补明细：对指定的一批目的地查询具体航班与余票 */
+export async function enrichRoundtrip(payload) {
+  const res = await fetch('/api/roundtrip/enrich', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.authExpired = !!data.authExpired;
+    throw err;
+  }
+  return data;
+}
