@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,39 @@ except Exception:  # 允许独立导入做测试
     db = None
 
 CRED_PATH = Path.home() / ".clairline" / "credentials.json"
+
+# 记录最近一次「服务端判定凭据失效」的时间戳。
+# 用它把「本地有 Token」和「Token 还能用」区分开 —— 否则界面会一直显示已登录但处处报错。
+EXPIRED_FLAG = Path.home() / ".clairline" / ".expired"
+_expired_at = 0.0
+
+
+def _read_expired_flag() -> float:
+    try:
+        return float(EXPIRED_FLAG.read_text(encoding="utf-8").strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def mark_expired():
+    """服务端返回 100001/403 时调用；落盘以便重启后仍然生效"""
+    global _expired_at
+    _expired_at = time.time()
+    try:
+        EXPIRED_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        EXPIRED_FLAG.write_text(str(_expired_at), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def clear_expired():
+    """重新登录成功后调用"""
+    global _expired_at
+    _expired_at = 0.0
+    try:
+        EXPIRED_FLAG.unlink(missing_ok=True)
+    except Exception:
+        pass
 REFRESH_HINT = "登录态已失效：请点击页面右上角的会员胶囊，用手机号 + 短信验证码重新登录。"
 
 
@@ -95,9 +129,20 @@ class MacCaptureManager:
         has_card = bool(str(template.get("secCardGrantTid") or ""))
         captured_at = data.get("captured_at") or ""
 
+        # 凭据文件比「失效标记」新 → 说明刚重新登录过，视为有效
+        try:
+            cred_mtime = CRED_PATH.stat().st_mtime
+        except Exception:
+            cred_mtime = 0
+        marked = max(_expired_at, _read_expired_flag())
+        expired = marked > 0 and cred_mtime <= marked
+
         if not token:
             self.status = "idle"
             self.message = "尚未登录"
+        elif expired:
+            self.status = "expired"
+            self.message = "登录态已过期，请重新用手机验证码登录"
         else:
             self.status = "success"
             self.message = f"已登录（{captured_at or '未知时间'}）"
@@ -105,7 +150,8 @@ class MacCaptureManager:
 
         return {
             "ok": True,
-            "is_logged_in": bool(token),
+            "is_logged_in": bool(token) and not expired,
+            "needs_login": (not token) or expired,
             "user_name": data.get("user_name") or "长龙会员",
             "mobile": _mask(data.get("mobile") or "", 3, 4),
             "member_level": data.get("member_level") or ("乘云会员" if token else "未登录"),

@@ -432,6 +432,12 @@ def persist_profile(token: str, refresh_token: str, mobile: str,
         print(f"[LoongAir] 写入数据库失败: {e}")
 
     try:
+        import mac_auth
+        mac_auth.clear_expired()
+    except Exception:
+        pass
+
+    try:
         from seccard_client import SecCardClient
         SecCardClient().check_and_reload(force=True)
     except Exception:

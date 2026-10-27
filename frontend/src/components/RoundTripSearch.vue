@@ -290,9 +290,12 @@ async function runSearch() {
     });
     searched.value = true;
   } catch (e) {
-    error.value = e.authExpired
-      ? '登录态已失效，请在终端运行 ./refresh-token.sh 后重试'
-      : (e.message || '搜索失败');
+    if (e.authExpired) {
+      window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
+      error.value = '登录态已失效，请点右上角「同步长龙登录」，用手机验证码重新登录一次';
+    } else {
+      error.value = e.message || '搜索失败';
+    }
   } finally {
     loading.value = false;
   }

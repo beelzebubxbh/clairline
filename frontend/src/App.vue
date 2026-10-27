@@ -236,6 +236,9 @@ watch(currentTab, (val) => {
 }, { immediate: true });
 
 onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('clairline:auth-expired', handleAuthExpired);
+  }
   document.body.classList.remove('is-map-tab');
   document.body.classList.remove('is-map-fullscreen');
   if (patrolPollTimer) {
@@ -854,6 +857,15 @@ async function handleRefreshCalendar({ from, to, done }) {
 function openDrawer(route) {
   selectedRoute.value = route;
   drawerVisible.value = true;
+}
+
+// 登录态失效统一处理：刷新状态（头部会切回「同步长龙登录」）并提示
+function handleAuthExpired() {
+  refreshAuthStatus();
+  showToast('登录态已失效，请点右上角重新用手机验证码登录');
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('clairline:auth-expired', handleAuthExpired);
 }
 
 onMounted(async () => {

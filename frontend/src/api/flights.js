@@ -21,6 +21,11 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
     if (!res.ok) {
       const err = new Error(data.error || `HTTP ${res.status}`);
       err.response = data;
+      if (data && data.authExpired) {
+        err.authExpired = true;
+        // 通知应用层：登录态失效，切回未登录状态并引导重新登录
+        window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
+      }
       throw err;
     }
     return data;

@@ -192,7 +192,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                     "bookableTo": hi.isoformat(),
                 })
             except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
+                self.send_api_error(e)
             return
 
         if path == "/api/status":
@@ -268,7 +268,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                     "savedToDb": True
                 })
             except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
+                self.send_api_error(e)
             return
 
         elif path == "/api/seat-cache":
@@ -354,7 +354,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                 dests = client.get_official_destinations(frm)
                 self.send_json({"ok": True, "from": frm, "destinations": dests, "count": len(dests)})
             except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
+                self.send_api_error(e)
             return
 
         elif path == "/api/monitor/tasks":
@@ -490,6 +490,18 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.log_message(f"Error serving {file_path}: {e}")
 
+    def send_api_error(self, e, status: int = 500):
+        """统一 API 错误出口：凭据失效返回 401 + authExpired，便于前端引导重新登录"""
+        if isinstance(e, AuthExpired):
+            try:
+                import mac_auth
+                mac_auth.mark_expired()
+            except Exception:
+                pass
+            self.send_json({"ok": False, "authExpired": True, "error": str(e)}, 401)
+            return
+        self.send_json({"ok": False, "error": str(e)}, status)
+
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -521,7 +533,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
             except AuthExpired as e:
                 self.send_json({"ok": False, "authExpired": True, "error": str(e)}, 401)
             except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
+                self.send_api_error(e)
             return
 
         elif path == "/api/monitor/tasks":
@@ -676,7 +688,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                     body.get("mobile", ""), body.get("checkParam", ""))
                 self.send_json(res)
             except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
+                self.send_api_error(e)
             return
 
         elif path == "/api/auth/login-code":
@@ -686,7 +698,7 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
                     body.get("verifyId", ""))
                 self.send_json(res)
             except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, 500)
+                self.send_api_error(e)
             return
 
         elif path == "/api/auth/reset":
