@@ -1,410 +1,345 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click.self="handleOverlayClick">
-    <div class="modal-card" style="max-width: 480px;">
-      <!-- 模态框头部 -->
-      <div class="modal-header">
-        <div style="font-weight:800; font-size:1.05rem; display:flex; align-items:center; gap:8px;">
-          <span v-html="ICONS.shield" style="color:var(--accent-cyan);"></span>
-          <span>长龙航空 · 会员登录与凭证同步向导</span>
-        </div>
-        <button type="button" class="btn-popover-close" style="font-size:1.3rem;" @click="closeModal">&times;</button>
-      </div>
-
-      <!-- 模态框主体 -->
-      <div class="modal-body" style="padding:18px 20px;">
-        
-        <!-- 当前状态卡片 -->
-        <div 
-          style="padding:12px 14px; border-radius:8px; margin-bottom:14px;"
-          :style="{ 
-            background: effectiveAuth?.is_logged_in ? '#f0fdf4' : '#fffbeb',
-            border: effectiveAuth?.is_logged_in ? '1px solid #bbf7d0' : '1px solid #fde68a'
-          }"
-        >
-          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-            <div style="display:flex; align-items:center; gap:10px;">
-              <span 
-                style="width:10px; height:10px; border-radius:50%; display:inline-block;"
-                :style="{ background: effectiveAuth?.is_logged_in ? '#10b981' : '#f59e0b' }"
-              ></span>
-              <div>
-                <div style="font-size:0.85rem; font-weight:800; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
-                  <span>{{ effectiveAuth?.is_logged_in ? effectiveAuth.user_name : '尚未同步长龙会员登录态' }}</span>
-                  <span 
-                    v-if="effectiveAuth?.is_logged_in && (effectiveAuth.is_verified || effectiveAuth.user_name !== '长龙会员')"
-                    style="font-size:0.65rem; padding:1px 5px; border-radius:3px; background:#dcfce7; color:#15803d; font-weight:700;"
-                  >
-                    已实名
-                  </span>
-                </div>
-                <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">
-                  {{ effectiveAuth?.is_logged_in ? `手机: ${effectiveAuth.mobile || '已同步'} · 更新: ${effectiveAuth.update_time || '刚刚'}` : '同步后可实时获取航班剩余机位与真实放票日历' }}
-                </div>
-              </div>
+  <transition name="am-fade">
+    <div v-if="visible" class="am-overlay" @click.self="close">
+      <div class="am-panel">
+        <header class="am-head">
+          <div class="am-title">
+            <span class="am-icon">✈</span>
+            <div>
+              <h2>{{ authStatus?.is_logged_in ? '长龙会员' : '手机号登录' }}</h2>
+              <p>{{ authStatus?.is_logged_in ? '已绑定畅飞卡，可直接查询放票' : '短信验证码直登，无需抓包与证书' }}</p>
             </div>
-            <span 
-              v-if="effectiveAuth?.is_logged_in"
-              style="font-size:0.72rem; padding:3px 9px; border-radius:4px; background:#e0f2fe; color:#0284c7; font-weight:800; display:inline-flex; align-items:center; gap:4px;"
-            >
-              <span v-html="ICONS.crown" style="display:inline-flex;"></span>
-              <span>{{ effectiveAuth.member_level || '乘云会员' }}</span>
-            </span>
           </div>
-        </div>
+          <button class="am-close" @click="close" title="关闭">✕</button>
+        </header>
 
-        <!-- 场景 1：如果已经抓取并同步成功，直接展示已就绪状态，不展示“开始同步”大按钮 -->
-        <div 
-          v-if="effectiveAuth?.is_logged_in && !showResyncFlow && !isCapturing && !captureSuccess"
-          style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:18px 16px; text-align:center; margin-bottom:8px;"
-        >
-          <div style="display:inline-flex; margin-bottom:6px; color:#10b981;" v-html="ICONS.checkCircle"></div>
-          <div style="font-size:0.92rem; font-weight:800; color:#047857; margin-bottom:4px;">
-            长龙会员凭证已同步生效
+        <!-- 已登录 -->
+        <section v-if="authStatus?.is_logged_in" class="am-body">
+          <div class="am-profile">
+            <div class="am-avatar">{{ (authStatus.user_name || '长').slice(0, 1) }}</div>
+            <div class="am-info">
+              <div class="am-name">
+                {{ authStatus.user_name }}
+                <span class="am-level">{{ authStatus.member_level }}</span>
+              </div>
+              <div class="am-meta">
+                <span v-if="authStatus.mobile">手机 {{ authStatus.mobile }}</span>
+                <span v-if="authStatus.is_verified" class="am-ok">已实名</span>
+                <span v-else class="am-warn">未实名</span>
+              </div>
+              <div class="am-time">上次登录：{{ authStatus.update_time || '—' }}</div>
+            </div>
           </div>
-          <div style="font-size:0.75rem; color:#065f46; line-height:1.5; margin-bottom:16px;">
-            当前已建立长龙小程序认证通道，畅飞卡剩余机位与真实放票日历处于就绪状态。
+
+          <div class="am-note">
+            登录态失效时会先用 refreshToken 自动续期；续期也失败才需要重新登录。
           </div>
-          <button 
-            type="button" 
-            class="btn-glass" 
-            style="font-size:0.75rem; color:#0284c7; border-color:#bae6fd; padding:5px 14px; background:#ffffff; display:inline-flex; align-items:center; gap:5px; margin:0 auto;"
-            @click="showResyncFlow = true"
-          >
-            <span v-html="ICONS.refresh" style="display:inline-flex;"></span>
-            <span>重新同步或切换账号</span>
+
+          <div class="am-actions">
+            <button class="am-btn ghost" @click="handleLogout" :disabled="busy">退出登录</button>
+            <button class="am-btn primary" @click="close">完成</button>
+          </div>
+        </section>
+
+        <!-- 未登录 -->
+        <section v-else class="am-body">
+          <label class="am-field">
+            <span>手机号</span>
+            <input
+              v-model="mobile"
+              type="tel"
+              inputmode="numeric"
+              maxlength="11"
+              placeholder="长龙航空注册手机号"
+              @keyup.enter="handleSend"
+            />
+          </label>
+
+          <label class="am-field">
+            <span>短信验证码</span>
+            <div class="am-code-row">
+              <input
+                ref="codeInput"
+                v-model="code"
+                class="sms-code-input"
+                type="tel"
+                inputmode="numeric"
+                maxlength="6"
+                placeholder="6 位数字"
+                @keyup.enter="handleLogin"
+              />
+              <button
+                class="am-code-btn"
+                :disabled="countdown > 0 || sending"
+                @click="handleSend"
+              >{{ countdown > 0 ? `${countdown}s` : (sending ? '发送中…' : '获取验证码') }}</button>
+            </div>
+          </label>
+
+          <p v-if="error" class="am-error">{{ error }}</p>
+          <p v-else-if="hint" class="am-hint">{{ hint }}</p>
+
+          <button class="am-btn primary block" :disabled="busy || !mobile || !code" @click="handleLogin">
+            {{ busy ? '登录中…' : '立即登录' }}
           </button>
-        </div>
 
-        <!-- 场景 2：未登录、或用户主动点击重新同步、或正在嗅探捕获中 -> 展示向导流程 -->
-        <div v-else>
-          <!-- 步骤 1：本地安全根证书检查 -->
-          <div style="background:#f8fafc; border:1px solid var(--border-subtle); border-radius:6px; padding:12px 14px; margin-bottom:12px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-              <div style="font-size:0.82rem; font-weight:700; display:flex; align-items:center; gap:6px;">
-                <span v-html="ICONS.shield" :style="{ color: authStatus?.cert_installed ? '#10b981' : '#f59e0b' }"></span>
-                <span>步骤 1：本地安全根证书</span>
-              </div>
-              <span 
-                style="font-size:0.72rem; font-weight:700; padding:2px 8px; border-radius:4px;"
-                :style="{ 
-                  background: authStatus?.cert_installed ? '#dcfce7' : '#fee2e2',
-                  color: authStatus?.cert_installed ? '#15803d' : '#b91c1c'
-                }"
-              >
-                {{ authStatus?.cert_installed ? '已信任' : '待配置' }}
-              </span>
-            </div>
+          <p class="am-tip">
+            验证码由长龙航空官方下发，手机号与 Token 只保存在本机
+            <code>~/.clairline/</code>，不会上传到任何第三方。
+          </p>
+        </section>
 
-            <div v-if="authStatus?.cert_installed" style="font-size:0.75rem; color:#15803d;">
-              系统已正确信任 mitmproxy 根证书，无需额外配置，可直接进行步骤 2。
-            </div>
-            <div v-else>
-              <div style="font-size:0.75rem; color:#b45309; line-height:1.5; margin-bottom:8px;">
-                首次使用需要将本地解密证书加入系统受信任存储区（仅需配置一次）。
-              </div>
-              <button 
-                type="button" 
-                class="btn-primary" 
-                style="padding:5px 12px; font-size:0.75rem; display:inline-flex; align-items:center; gap:5px;" 
-                :disabled="installingCert"
-                @click="handleInstallCert"
-              >
-                <span v-html="ICONS.shield" style="display:inline-flex;"></span>
-                <span>{{ installingCert ? '正在安装...' : '一键自动导入根证书' }}</span>
-              </button>
-              <div style="font-size:0.7rem; color:#94a3b8; margin-top:4px;">
-                * 导入时若 Windows 弹出安全警告提示框，请点击“是”允许信任
-              </div>
-            </div>
-          </div>
-
-          <!-- 步骤 2：自动网络嗅探与凭据捕获 -->
-          <div style="background:#f8fafc; border:1px solid var(--border-subtle); border-radius:6px; padding:12px 14px;">
-            <div style="font-size:0.82rem; font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
-              <span v-html="ICONS.radar" style="color:var(--accent-cyan);"></span>
-              <span>步骤 2：启动自动嗅探与同步</span>
-            </div>
-
-            <!-- 待命状态：尚未开始嗅探 -->
-            <div v-if="!isCapturing && !captureSuccess">
-              <div style="font-size:0.75rem; color:var(--text-secondary); line-height:1.5; margin-bottom:10px;">
-                点击下方按钮后，程序将<strong>自动开启系统代理 (127.0.0.1:8080)</strong>。此时只需在电脑版微信中点开<strong>【长龙航空】小程序 ➔ 点击【我的】</strong>，程序捕获凭据后将<strong>全自动关闭系统代理并存入数据库</strong>。
-              </div>
-              <button 
-                type="button" 
-                class="btn-primary" 
-                style="width:100%; padding:8px 0; font-size:0.82rem; justify-content:center; display:inline-flex; align-items:center; gap:6px;"
-                @click="handleStartCapture"
-              >
-                <span v-html="ICONS.zap" style="display:inline-flex;"></span>
-                <span>开始同步长龙登录态 (自动托管代理)</span>
-              </button>
-            </div>
-
-            <!-- 正在嗅探中 -->
-            <div v-else-if="isCapturing && !captureSuccess" style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px; padding:12px; text-align:center;">
-              <div style="display:inline-block; margin-bottom:8px;">
-                <span class="auth-spin-radar" v-html="ICONS.radar"></span>
-              </div>
-              <div style="font-size:0.82rem; font-weight:800; color:#047857; margin-bottom:4px;">
-                Windows 系统代理已自动开启 (127.0.0.1:8080)
-              </div>
-              <div style="font-size:0.75rem; color:#065f46; line-height:1.5; margin-bottom:12px;">
-                请在微信电脑版中打开<strong>【长龙航空】小程序</strong>，务必点击底部的<strong>【我的】</strong>页面加载个人中心...
-              </div>
-              <button 
-                type="button" 
-                class="btn-glass" 
-                style="padding:4px 14px; font-size:0.75rem;" 
-                @click="handleStopCapture"
-              >
-                取消同步 (自动关闭系统代理)
-              </button>
-            </div>
-
-            <!-- 捕获成功状态 -->
-            <div v-else-if="captureSuccess" style="background:#ecfdf5; border:1px solid #6ee7b7; border-radius:6px; padding:12px; text-align:center;">
-              <div style="display:inline-flex; margin-bottom:6px; color:#10b981;" v-html="ICONS.checkCircle"></div>
-              <div style="font-size:0.88rem; font-weight:800; color:#047857; margin-bottom:4px;">
-                长龙会员凭据同步成功！
-              </div>
-              <div style="font-size:0.75rem; color:#065f46;">
-                Windows 系统代理已全自动恢复关闭，网络恢复正常直连。
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-
-
-      <!-- 模态框底部 -->
-      <div class="modal-footer" style="justify-content: space-between; align-items:center;">
-        <div style="display:flex; align-items:center; gap:8px;">
-          <button 
-            type="button" 
-            class="btn-glass" 
-            style="font-size:0.7rem; color:#ef4444; border-color:#fecaca; padding:3px 8px;"
-            title="清空 credentials.json 与数据库个人信息，还原为新用户状态"
-            @click="handleResetAuth"
-          >
-            清空登录态 (重置)
-          </button>
-          <button 
-            v-if="authStatus?.cert_installed"
-            type="button" 
-            class="btn-glass" 
-            style="font-size:0.7rem; color:#f59e0b; border-color:#fed7aa; padding:3px 8px;"
-            title="从 Windows 系统证书库中移除 mitmproxy 根证书，测试全新安装流程"
-            @click="handleUninstallCert"
-          >
-            卸载证书测试
-          </button>
-        </div>
-        <div style="display:flex; align-items:center; gap:12px;">
-          <a 
-            href="https://github.com/eureka-wu/clairline" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            style="font-size:0.7rem; color:var(--text-muted); text-decoration:none; display:inline-flex; align-items:center; gap:4px;"
-            title="GitHub 开源仓库"
-          >
-            <span v-html="ICONS.github" style="display:inline-flex;"></span>
-            <span>eureka-wu/clairline</span>
-          </a>
-          <button type="button" class="btn-glass" style="font-size:0.78rem;" @click="closeModal">关闭</button>
-        </div>
+        <!-- 易盾滑块挂载点 -->
+        <div id="yidun-captcha-box" style="display:none;"></div>
       </div>
     </div>
-  </div>
+  </transition>
 </template>
 
 <script setup>
-import { ref, computed, watch, onUnmounted } from 'vue';
-import { ICONS } from '../data/icons.js';
-import { startCapture, stopCapture, fetchCaptureStatus, installCert, uninstallCert, resetAuth, fetchAuthStatus } from '../api/auth.js';
-
+import { ref, nextTick, watch } from 'vue';
+import { sendSmsCode, loginWithSmsCode, resetAuth } from '../api/auth.js';
 
 const props = defineProps({
-  visible: Boolean,
-  authStatus: Object,
-  autoStart: Boolean
+  visible: { type: Boolean, default: false },
+  authStatus: { type: Object, default: () => ({}) }
 });
-
 const emit = defineEmits(['close', 'synced', 'refresh-auth']);
 
-const isCapturing = ref(false);
-const captureSuccess = ref(false);
-const installingCert = ref(false);
-const localAuth = ref(null);
-let pollTimer = null;
+// 网易易盾验证码 ID（与长龙官网使用同一个）
+const CAPTCHA_ID = 'd574bdc4ef2f474f9d21fe3c59291491';
 
-const effectiveAuth = computed(() => {
-  return localAuth.value || props.authStatus || {};
-});
+const mobile = ref('');
+const code = ref('');
+const verifyId = ref('');
+const countdown = ref(0);
+const sending = ref(false);
+const busy = ref(false);
+const error = ref('');
+const hint = ref('');
+const codeInput = ref(null);
 
-watch(() => props.visible, (val) => {
-  if (val) {
-    captureSuccess.value = false;
-    localAuth.value = null;
-    emit('refresh-auth');
-    if (props.autoStart && !isCapturing.value) {
-      setTimeout(() => {
-        handleStartCapture();
-      }, 250);
-    }
-  } else {
-    if (isCapturing.value) {
-      handleStopCapture();
-    }
-  }
-});
+let captchaInstance = null;
+let timer = null;
 
-function notify(title, message, type = 'info') {
-  if (typeof window !== 'undefined' && window.$dialog) {
-    window.$dialog(title, message, type);
-  } else {
-    alert(`${title}: ${message}`);
-  }
-}
-
-async function handleInstallCert() {
-  installingCert.value = true;
-  try {
-    const res = await installCert();
-    if (res.ok) {
-      notify('证书安装成功', '根证书已成功导入系统受信任存储区！', 'success');
-      emit('refresh-auth');
-    } else {
-      notify('证书导入提示', res.error || '未完成导入，请检查系统权限', 'warning');
-    }
-  } catch (e) {
-    notify('操作失败', e.message || '证书安装异常', 'error');
-  } finally {
-    installingCert.value = false;
-  }
-}
-
-async function handleResetAuth() {
-  if (!confirm('确定清空本地登录凭据与会员信息？将模拟纯净新用户状态。')) return;
-  try {
-    const res = await resetAuth();
-    if (res.ok) {
-      notify('重置成功', '已彻底清空本地会员凭据，恢复为纯净新用户状态！', 'success');
-      emit('refresh-auth');
-      emit('synced');
-    }
-  } catch (e) {
-    notify('重置失败', e.message || '重置异常', 'error');
-  }
-}
-
-async function handleUninstallCert() {
-  if (!confirm('确定从 Windows 信任库中移除 mitmproxy 根证书以测试首次安装流程？')) return;
-  try {
-    const res = await uninstallCert();
-    if (res.ok) {
-      notify('证书移除完成', '已成功移除根证书！当前状态将变为未信任。', 'info');
-      emit('refresh-auth');
-    }
-  } catch (e) {
-    notify('卸载失败', e.message || '卸载异常', 'error');
-  }
-}
-
-
-async function handleStartCapture() {
-  try {
-    const res = await startCapture();
-    if (res.ok) {
-      isCapturing.value = true;
-      captureSuccess.value = false;
-      startPolling();
-    } else {
-      notify('启动嗅探失败', res.error || '未知原因', 'error');
-    }
-  } catch (e) {
-    notify('网络请求异常', e.message || '无法连接本地后台服务', 'error');
-  }
-}
-
-async function handleStopCapture() {
-  stopPolling();
-  isCapturing.value = false;
-  try {
-    await stopCapture();
-  } catch (e) {}
-}
-
-function startPolling() {
-  stopPolling();
-  pollTimer = setInterval(async () => {
-    try {
-      const res = await fetchCaptureStatus();
-      if (res && res.status === 'success') {
-        stopPolling();
-        isCapturing.value = false;
-        captureSuccess.value = true;
-        if (res.auth && res.auth.is_logged_in) {
-          localAuth.value = res.auth;
-        }
-        emit('refresh-auth', res.auth);
-        emit('synced');
-        // 瞬间丝滑过渡：400ms 快速关闭抓包框，立刻无缝拉起全屏发光雷达普查
-        setTimeout(() => {
-          closeModal();
-        }, 400);
-      } else if (res && res.status === 'error') {
-        stopPolling();
-        isCapturing.value = false;
-        notify('嗅探异常', res.message || '嗅探进程异常退出，详情请查看 logs/ 目录', 'error');
-      } else if (res && res.status === 'idle' && isCapturing.value) {
-        // 后台由于某种原因退出
-        stopPolling();
-        isCapturing.value = false;
-      }
-    } catch (e) {
-      stopPolling();
-      isCapturing.value = false;
-    }
-  }, 1000);
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-function handleOverlayClick() {
-  if (!isCapturing.value) {
-    closeModal();
-  }
-}
-
-function closeModal() {
-  if (isCapturing.value) {
-    handleStopCapture();
-  }
+function close() {
   emit('close');
 }
 
-onUnmounted(() => {
-  stopPolling();
+function resetState() {
+  mobile.value = '';
+  code.value = '';
+  verifyId.value = '';
+  countdown.value = 0;
+  error.value = '';
+  hint.value = '';
+  sending.value = false;
+  busy.value = false;
+  if (timer) { clearInterval(timer); timer = null; }
+}
+
+function startCountdown() {
+  countdown.value = 60;
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => {
+    countdown.value -= 1;
+    if (countdown.value <= 0) { clearInterval(timer); timer = null; }
+  }, 1000);
+}
+
+function handleSend() {
+  error.value = '';
+  hint.value = '';
+  const m = (mobile.value || '').trim();
+  if (!/^1[3-9]\d{9}$/.test(m)) {
+    error.value = '请输入正确的 11 位手机号';
+    return;
+  }
+  if (typeof window.initNECaptcha !== 'function') {
+    error.value = '安全验证组件未加载（需联网加载网易易盾 SDK），请检查网络后重试';
+    return;
+  }
+
+  try {
+    window.initNECaptcha({
+      captchaId: CAPTCHA_ID,
+      element: '#yidun-captcha-box',
+      mode: 'popup',
+      width: 320,
+      onVerify: async (err, data) => {
+        if (err) return; // 滑块未通过，易盾自己会刷新，不打断用户
+        const validate = data?.validate || '';
+        if (!validate) return;
+        await doSend(m, validate);
+      },
+      onClose: () => { sending.value = false; }
+    }, (instance) => {
+      captchaInstance = instance;
+      captchaInstance.popUp();
+    }, (err) => {
+      sending.value = false;
+      error.value = '安全组件初始化失败：' + (err?.message || '请检查网络');
+    });
+  } catch (e) {
+    sending.value = false;
+    error.value = '安全组件异常：' + (e.message || e);
+  }
+}
+
+async function doSend(m, validate) {
+  sending.value = true;
+  try {
+    const res = await sendSmsCode(m, validate);
+    if (res.ok) {
+      verifyId.value = res.verifyId || '';
+      startCountdown();
+      hint.value = '验证码已下发，请查收短信';
+      await nextTick();
+      codeInput.value?.focus();
+    } else {
+      error.value = res.error || '发送失败';
+    }
+  } catch (e) {
+    error.value = e.message || '发送失败';
+  } finally {
+    sending.value = false;
+  }
+}
+
+async function handleLogin() {
+  error.value = '';
+  if (!/^\d{6}$/.test((code.value || '').trim())) {
+    error.value = '请输入 6 位短信验证码';
+    return;
+  }
+  busy.value = true;
+  try {
+    const res = await loginWithSmsCode((mobile.value || '').trim(), code.value.trim(), verifyId.value);
+    if (res.ok) {
+      emit('synced', res);
+      emit('close');
+      resetState();
+    } else {
+      error.value = res.error || '登录失败';
+    }
+  } catch (e) {
+    error.value = e.message || '登录失败';
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleLogout() {
+  if (!window.confirm('确定要退出登录吗？本地凭据会被清空，需要重新接收短信验证码。')) return;
+  busy.value = true;
+  try {
+    await resetAuth();
+    emit('refresh-auth');
+    emit('close');
+  } catch (e) {
+    error.value = e.message || '退出失败';
+  } finally {
+    busy.value = false;
+  }
+}
+
+watch(() => props.visible, (v) => {
+  if (v) resetState();
 });
 </script>
 
 <style scoped>
-.auth-spin-radar {
-  display: inline-flex;
-  color: #10b981;
-  animation: radar-pulse 1.8s linear infinite;
+.am-overlay {
+  position: fixed; inset: 0; z-index: 3100;
+  background: rgba(15, 23, 42, 0.45); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.am-panel {
+  width: min(430px, 100%); background: var(--bg-surface);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden;
+}
+.am-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 18px 20px 14px; border-bottom: 1px solid var(--border-subtle);
+}
+.am-title { display: flex; gap: 12px; align-items: center; }
+.am-icon {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: #eff6ff; color: #2563eb; display: grid; place-items: center; font-size: 17px;
+}
+.am-title h2 { margin: 0; font-size: 1rem; color: var(--text-primary); }
+.am-title p { margin: 2px 0 0; font-size: 0.76rem; color: var(--text-muted); }
+.am-close {
+  border: none; background: transparent; cursor: pointer; padding: 4px 8px;
+  color: var(--text-dim); border-radius: var(--radius-sm); font-size: 0.95rem;
+}
+.am-close:hover { background: #f1f5f9; color: var(--text-primary); }
+
+.am-body { padding: 18px 20px 20px; }
+
+.am-profile { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+.am-avatar {
+  width: 48px; height: 48px; border-radius: 50%; flex: none;
+  background: linear-gradient(135deg, #34d399, #059669); color: #fff;
+  display: grid; place-items: center; font-size: 1.1rem; font-weight: 700;
+}
+.am-name { font-size: 1rem; font-weight: 700; color: var(--text-primary); display: flex; gap: 8px; align-items: center; }
+.am-level {
+  font-size: 0.68rem; font-weight: 600; color: #b45309; background: #fef3c7;
+  padding: 1px 7px; border-radius: var(--radius-full);
+}
+.am-meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; display: flex; gap: 10px; }
+.am-ok { color: var(--accent-emerald); }
+.am-warn { color: #b45309; }
+.am-time { font-size: 0.72rem; color: var(--text-dim); margin-top: 4px; }
+
+.am-note {
+  font-size: 0.75rem; color: var(--text-muted); background: #f8fafc;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  padding: 9px 12px; line-height: 1.5; margin-bottom: 16px;
 }
 
-@keyframes radar-pulse {
-  0% { transform: scale(0.95); opacity: 0.7; }
-  50% { transform: scale(1.15); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.7; }
+.am-field { display: block; margin-bottom: 14px; }
+.am-field > span { display: block; font-size: 0.75rem; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
+.am-field input {
+  width: 100%; box-sizing: border-box; padding: 10px 12px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  font-size: 0.9rem; color: var(--text-primary); background: #fff; outline: none;
 }
+.am-field input:focus { border-color: var(--border-focus); }
+.am-code-row { display: flex; gap: 8px; }
+.am-code-row input { flex: 1; letter-spacing: 2px; }
+.am-code-btn {
+  flex: none; min-width: 108px; padding: 0 14px; cursor: pointer;
+  border: 1px solid var(--accent-emerald-border); background: var(--accent-emerald-light);
+  color: var(--accent-emerald); border-radius: var(--radius-md);
+  font-size: 0.8rem; font-weight: 600;
+}
+.am-code-btn:disabled { opacity: .55; cursor: default; }
+
+.am-error {
+  font-size: 0.78rem; color: #b91c1c; background: #fef2f2;
+  border: 1px solid #fecaca; border-radius: var(--radius-md);
+  padding: 8px 12px; margin: 0 0 14px;
+}
+.am-hint { font-size: 0.78rem; color: var(--accent-emerald); margin: 0 0 14px; }
+
+.am-btn {
+  border: none; cursor: pointer; border-radius: var(--radius-full);
+  padding: 10px 20px; font-size: 0.86rem; font-weight: 600;
+}
+.am-btn.primary { background: var(--accent-emerald); color: #fff; }
+.am-btn.ghost { background: #f1f5f9; color: var(--text-secondary); }
+.am-btn.block { width: 100%; }
+.am-btn:disabled { opacity: .55; cursor: default; }
+.am-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+.am-tip {
+  font-size: 0.71rem; color: var(--text-dim); line-height: 1.6;
+  margin: 14px 0 0; text-align: center;
+}
+.am-tip code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; }
+
+.am-fade-enter-active, .am-fade-leave-active { transition: opacity .16s; }
+.am-fade-enter-from, .am-fade-leave-to { opacity: 0; }
 </style>

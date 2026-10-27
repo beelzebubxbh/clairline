@@ -268,13 +268,28 @@ class SecCardClient:
             self.template = params
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔑 成功装载最新登录凭据 (来自 {self.saz_path.name})")
 
+    def _try_refresh(self) -> bool:
+        """用 refreshToken 无感续期。成功返回 True。"""
+        try:
+            from loongair_client import refresh_access_token
+            res = refresh_access_token()
+            if res.get("ok"):
+                self.check_and_reload(force=True)
+                return bool(self.headers)
+            print(f"[refresh] 续期未成功: {res.get('error')}")
+        except Exception as e:
+            print(f"[refresh] 续期异常: {e}")
+        return False
+
     def call_api(self, method: str, params: dict, retry_on_auth_err: bool = True):
         # 调用前热重载检查
         self.check_and_reload()
         if not self.headers:
-            raise RuntimeError(
-                "登录态未就绪：请先运行 `python3 backend/refresh_token.py` 抓取一次小程序登录态"
-            )
+            # 关键：先尝试用 refreshToken 自动续期。
+            # 上游版本在这里直接报错，导致「跨自然日清空凭据」时续期永远用不上。
+            if retry_on_auth_err and self._try_refresh():
+                return self.call_api(method, params, retry_on_auth_err=False)
+            raise AuthExpired("未登录：请点击右上角用手机号 + 短信验证码登录")
         body_obj = {
             "AppID": "ClientService",
             "MethodName": method,
@@ -308,21 +323,25 @@ class SecCardClient:
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 if retry_on_auth_err:
+                    if self._try_refresh():
+                        return self.call_api(method, params, retry_on_auth_err=False)
                     self.check_and_reload(force=True)
                     return self.call_api(method, params, retry_on_auth_err=False)
                 raise AuthExpired(
-                    f"长龙接口返回 {e.code}：登录态已失效，请重新运行 refresh_token.py 抓取"
+                    f"登录态已失效（HTTP {e.code}）：请点击右上角用手机验证码重新登录"
                 )
             raise RuntimeError(f"长龙接口 HTTP 错误: {e.code}")
         except Exception as e:
             raise RuntimeError(f"网络请求失败: {e}")
 
         if payload.get("ErrorCode") == 100001:
-            # 未登录
+            # 未登录 / Token 过期
             if retry_on_auth_err:
+                if self._try_refresh():
+                    return self.call_api(method, params, retry_on_auth_err=False)
                 self.check_and_reload(force=True)
                 return self.call_api(method, params, retry_on_auth_err=False)
-            raise AuthExpired("长龙接口未登录 (100001)：登录态已过期，请重新抓取")
+            raise AuthExpired("登录态已过期（100001）：请点击右上角用手机验证码重新登录")
 
         if payload.get("ErrorCode") != 0:
             raise RuntimeError(f"长龙接口错误 ({payload.get('ErrorCode')}): {payload.get('message')}")

@@ -26,10 +26,7 @@ except Exception:  # 允许独立导入做测试
     db = None
 
 CRED_PATH = Path.home() / ".clairline" / "credentials.json"
-REFRESH_HINT = (
-    "登录态需要刷新：在终端运行 `./refresh-token.sh`，"
-    "按提示在微信里打开长龙航空小程序「我的」页即可自动捕获。"
-)
+REFRESH_HINT = "登录态已失效：请点击页面右上角的会员胶囊，用手机号 + 短信验证码重新登录。"
 
 
 def _load_cred_file() -> dict:
@@ -100,10 +97,10 @@ class MacCaptureManager:
 
         if not token:
             self.status = "idle"
-            self.message = "尚未同步登录态"
+            self.message = "尚未登录"
         else:
             self.status = "success"
-            self.message = f"凭据就绪（抓取于 {captured_at or '未知时间'}）"
+            self.message = f"已登录（{captured_at or '未知时间'}）"
             self.last_capture_time = captured_at
 
         return {

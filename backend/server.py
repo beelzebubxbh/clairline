@@ -40,6 +40,7 @@ from seccard_client import SecCardClient, CITY_IATA, IATA_CITY
 from scheduler import MonitorScheduler
 from mac_auth import capture_mgr, install_root_cert, uninstall_root_cert, reset_user_auth
 import roundtrip
+import loongair_client
 from seccard_client import AuthExpired
 
 
@@ -47,7 +48,7 @@ from seccard_client import AuthExpired
 db.init_db()
 
 PORT = 3000
-APP_VERSION = "v2.1.0"
+APP_VERSION = "v2.2.0"
 GITHUB_REPO = "beelzebubxbh/clairline"
 client = SecCardClient()
 scheduler = MonitorScheduler(client)
@@ -667,6 +668,25 @@ class AppHandler(http.server.SimpleHTTPRequestHandler):
         elif path == "/api/cert/uninstall":
             res = uninstall_root_cert()
             self.send_json(res, 200 if res.get("ok") else 500)
+            return
+
+        elif path == "/api/auth/send-code":
+            try:
+                res = loongair_client.send_sms_code(
+                    body.get("mobile", ""), body.get("checkParam", ""))
+                self.send_json(res)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        elif path == "/api/auth/login-code":
+            try:
+                res = loongair_client.login_with_code(
+                    body.get("mobile", ""), body.get("code", ""),
+                    body.get("verifyId", ""))
+                self.send_json(res)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
 
         elif path == "/api/auth/reset":

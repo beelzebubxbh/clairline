@@ -3,7 +3,7 @@
 > 把长龙航空「畅飞卡 / 积分兑换」的放票日历和余票，做成一个本地网页大盘。
 > 浏览器打开就能用，数据全部留在你自己的 Mac 上，不上传任何云端。
 
-当前版本：**v2.1.0** · 仓库：<https://github.com/beelzebubxbh/clairline>
+当前版本：**v2.2.0** · 仓库：<https://github.com/beelzebubxbh/clairline>
 
 这是 [eureka-wu/clairline](https://github.com/eureka-wu/clairline) 的 **macOS 移植分支**。
 原版只支持 Windows（改注册表设代理 + `certutil` 装根证书 + WebView2 桌面壳），
@@ -31,77 +31,82 @@
 
 ## 快速开始
 
-### 第 0 步：装依赖
+### 第 1 步：装 Node（仅用于构建前端）
 
 ```bash
-# 前端构建需要（只在第一次构建时用）
 brew install node
-
-# 刷新登录态需要（只在登录失效时用）
-brew install mitmproxy
 ```
 
-> Python 不用装，用 macOS 自带的 `python3` 即可（3.9+，项目零第三方依赖）。
+> Python 不用装，用 macOS 自带的 `python3` 即可（3.9+）。
+> 脚本体只依赖标准库，**没有 pip 依赖**。
 
-### 第 1 步：拉代码
+### 第 2 步：拉代码并启动
 
 ```bash
 git clone https://github.com/beelzebubxbh/clairline.git
 cd clairline
+./run.sh
 ```
 
-### 第 2 步：同步一次登录态
+浏览器打开 <http://127.0.0.1:3000>。首次启动会自动构建前端（约 1 分钟），之后秒开。
+
+### 第 3 步：手机号登录
+
+点右上角「**同步长龙登录**」：
+
+1. 输入你在长龙航空注册的 **11 位手机号**
+2. 点「获取验证码」，拖动完成网易易盾的**滑块验证**
+3. 输入手机收到的 **6 位短信验证码**，点「立即登录」
+
+完成后右上角会显示你的会员姓名与等级，可以开始查票了。
+
+> **不需要装 mitmproxy、不需要装根证书、不需要开系统代理**——
+> 登录态由长龙官方接口直接签发，全程在浏览器里完成。
+
+---
+
+## 关于「登录态」
+
+### 怎么来的
+
+走的是长龙官方的小程序登录接口：
+
+```
+手机号 + 易盾 validate  →  getVerifyCode  →  短信验证码
+                        →  mobileCodeLogin  →  loongairToken + refreshToken
+```
+
+`loongairToken` 就是一个 base64 的 UUID（`Cookie: SESSION=` 同值），不是 JWT、不带过期时间。
+拿到之后所有查询都靠它。
+
+### 会过期吗
+
+会，但不用天天登录：
+
+- 每次查询遇到 403 或 `ErrorCode 100001` 时，会先用本地 `refreshToken` **自动续期**并重试；
+- 续期也失败，界面才会提示你重新登录一次。
+
+> 有一点值得说明：上游项目虽然加了 `refreshToken`，但保留了「凭据跨自然日就清空」的旧逻辑，
+> 而清空发生在续期判断之前——所以实际上每天零点后还是得重新登录，续期形同虚设。
+> 本分支删掉了那个强制清空，续期才真正生效。
+
+### 存在哪
+
+```
+~/.clairline/credentials.json   Token、会员档案（600 权限）
+~/.clairline/data/changlong.db  航班、日历、余票缓存
+```
+
+### 备用方案（正常情况下用不到）
+
+如果哪天短信通道抽风（易盾滑块加载不出来、官方接口改版），还可以退回**抓包**方式取 Token：
 
 ```bash
 ./refresh-token.sh
 ```
 
-首次运行它会提示你把 mitmproxy 的根证书装进系统信任区（**只做一次**）。
-复制它打印的那行 `sudo security add-trusted-cert ...` 到终端执行，输入开机密码，
-然后再跑一次 `./refresh-token.sh`。
-
-看到下面这段就说明开始抓了：
-
-```
-👉 现在请在 微信 → 长龙航空小程序 → 「我的」页面
-   随便点一次畅飞卡 / 积分兑换查询
-```
-
-**去微信里操作**（小程序必须重新打开，旧的连接不走代理）。
-几秒后它会自动捕获、落盘、关闭代理：
-
-```
-[✓] 登录态已保存到 /Users/你/.clairline/credentials.json
-[✓] 会员档案: 你的名字 / 乘云会员 L1
-```
-
-### 第 3 步：启动
-
-```bash
-./run.sh
-```
-
-浏览器打开 <http://127.0.0.1:3000> 即可。
-
-> 首次启动会自动构建前端（约 1 分钟），之后秒开。
-
----
-
-## 关于「登录态」——这是唯一需要理解的概念
-
-这个工具**没有账号密码登录**，它复用你微信小程序里已经登录好的会话。
-
-抓包实测的结论：
-
-- 所有请求都发给 `POST https://www.loongair.cn/webhandler.ashx`；
-- 那个看起来像签名的 `NESign` 请求头，实际值是字符串 `"[object Null]"`——
-  小程序自己的签名逻辑是坏的，**等于没有签名**；
-- `Authorization` 就是 base64 编码的一个 UUID（和 `Cookie: SESSION=` 同值），不是 JWT，不带过期时间。
-
-所以：**抓到一次就能一直用**，直到服务端让它失效。失效时页面会提示「登录态已失效」，
-这时再跑一次 `./refresh-token.sh` 就行。
-
-Token 存在 `~/.clairline/credentials.json`，权限 `600`，不随代码提交。
+它会临时起 mitmproxy、装根证书、抓一次微信小程序的请求头。需要 `brew install mitmproxy`
+和一次 `sudo` 装证书，抓完记得按 FAQ 卸载证书。
 
 ---
 
@@ -168,25 +173,24 @@ lsof -nP -iTCP:3000 -sTCP:LISTEN
 <details>
 <summary><b>提示「登录态已失效」或者一直 403</b></summary>
 
-失效就跑 `./refresh-token.sh`。
+正常情况下会先自动用 `refreshToken` 续期，你什么都不用做。
 
-如果抓包时一直是 403，先确认微信里的小程序是**重新打开**的——
-代理只对新的连接生效，已经打开的页面不会走代理。
+如果续期也失败（比如很久没打开过），点右上角会员胶囊重新用手机验证码登录一次即可。
 
-另外一个容易踩的坑：接口对 `Accept-Encoding` 请求头有硬性校验，
-缺了会直接返回 403（不是 TLS 指纹问题）。代码里已经强制补齐了，不用手动处理。
+顺带一个容易踩的坑：接口对 `Accept-Encoding` 请求头有硬性校验，
+缺了会直接返回 403（不是 TLS 指纹问题，网上常见的判断是错的）。代码里已经强制补齐。
 </details>
 
 <details>
-<summary><b>抓包一直超时</b></summary>
+<summary><b>收不到短信验证码 / 滑块加载不出来</b></summary>
 
-按顺序确认：
+按顺序排查：
 
-1. `mitmdump --version` 有输出（`brew install mitmproxy` 装过）
-2. 证书真的装好了：`security verify-cert -p ssl -c ~/.mitmproxy/mitmproxy-ca-cert.pem`
-   应该输出 `certificate verification successful`
-3. 微信里进的是「长龙航空」小程序，并且点进了需要登录的页面（我的 / 畅飞卡）
-4. 系统代理是否被别的软件（Clash、Surge 之类）接管了——抓包期间先关掉它们
+1. **滑块加载不出来**：网易易盾 SDK 是从 `cstaticdun.126.net` 加载的，
+   需要外网可达。检查浏览器控制台有没有报错。
+2. **提示「验签失败 (103900)」**：滑块没真正通过就点了发送，重新拖一次。
+3. **提示「验证码不正确 (200221)」**：验证码过期（一般 5 分钟），重新获取。
+4. **收不到短信**：确认手机号是长龙航空注册的那个号码；运营商拦截也可能导致收不到。
 </details>
 
 <details>
@@ -232,7 +236,8 @@ rm -rf ~/.clairline
 | 删除 `capture_manager.py` / `proxy_util.py` / `capture_addon.py` | 依赖 `winreg` 改注册表代理、`certutil` 装证书，macOS 上无法运行 |
 | 删除 `app_desktop.py` / `build_exe.py` | WebView2 桌面壳与 PyInstaller 打包，浏览器版不需要 |
 | 新增 `backend/mac_auth.py` | 提供与原 `capture_mgr` 完全相同的接口，`server.py` 只改一行 import |
-| 新增 `refresh_token.py` / `refresh-token.sh` | 把「常驻抓包」降级为「按需抓一次」，用完自动恢复代理 |
+| 新增**手机短信直登** | 接官方 `getVerifyCode` / `mobileCodeLogin` 接口 + 网易易盾滑块，彻底替代抓包 |
+| 保留 `refresh_token.py` / `refresh-token.sh` | 仅作短信通道不可用时的兜底 |
 | 修正 403 原因 | 原代码注释认为是 WAF 校验，实测确认**缺 `Accept-Encoding` 才会 403** |
 | 取消「跨自然日强制作废凭据」 | 原逻辑隔天就把还能用的 Token 清空，改为用到报错再刷新 |
 | 关闭「打开页面自动全网普查」 | 原逻辑会在页面加载时自动跑 397 条航线 |
@@ -268,6 +273,17 @@ rm -rf ~/.clairline
 ---
 
 ## 更新日志
+
+### v2.2.0 — 手机短信直登（2026-10-27）
+
+- 新增**手机号 + 短信验证码登录**，接长龙官方 `getVerifyCode` / `mobileCodeLogin` 接口，
+  配合网易易盾滑块验证。**不再需要 mitmproxy、根证书和系统代理。**
+- 新增 `refreshToken` 无感续期：遇到 403 / `100001` 自动换新 Token 并重试。
+- 修正上游遗留问题：续期逻辑与「凭据跨自然日清空」矛盾——清空发生在续期判断之前，
+  导致续期永远用不上。本版删除了强制清空。
+- 登录成功后不再自动触发全网普查（原会瞬间打 397 次接口）。
+- `db.py` 新增 `refresh_token` 列（自动迁移，无需手动操作）。
+- `loongair_client.py` 去掉 `requests` 依赖，改回标准库，保持零第三方依赖。
 
 ### v2.1.0 — 往返组合搜索（2026-10-26）
 

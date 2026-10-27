@@ -121,7 +121,6 @@
     <AuthModal 
       :visible="authModalVisible"
       :auth-status="authStatus"
-      :auto-start="autoStartCaptureOnOpen"
       @close="authModalVisible = false"
       @synced="handleAuthSynced"
       @refresh-auth="refreshAuthStatus"
@@ -356,11 +355,9 @@ const selectedRoute = ref({});
 const patrolModalVisible = ref(false);
 const roundtripVisible = ref(false);
 const authModalVisible = ref(false);
-const autoStartCaptureOnOpen = ref(false);
 const updateModalVisible = ref(false);
 
-function openAuthModal(autoStart = false) {
-  autoStartCaptureOnOpen.value = autoStart;
+function openAuthModal() {
   authModalVisible.value = true;
 }
 
@@ -370,8 +367,8 @@ if (typeof window !== 'undefined') {
 
 const updateInfo = ref({
   has_update: false,
-  current_version: 'v2.1.0',
-  latest_version: 'v2.1.0',
+  current_version: 'v2.2.0',
+  latest_version: 'v2.2.0',
   release_name: '',
   release_notes: '',
   page_url: 'https://github.com/eureka-wu/clairline/releases',
@@ -399,8 +396,8 @@ async function runCheckUpdate(manual = false) {
     } else if (manual) {
       updateInfo.value = {
         has_update: false,
-        current_version: 'v2.1.0',
-        latest_version: 'v2.1.0',
+        current_version: 'v2.2.0',
+        latest_version: 'v2.2.0',
         release_name: '长龙航空畅飞助手 v2.0',
         release_notes: '当前已是最新发布版本，暂无新版本发布。可访问 GitHub 开源仓库获取最新动态。',
         page_url: 'https://github.com/eureka-wu/clairline/releases'
@@ -411,8 +408,8 @@ async function runCheckUpdate(manual = false) {
     if (manual) {
       updateInfo.value = {
         has_update: false,
-        current_version: 'v2.1.0',
-        latest_version: 'v2.1.0',
+        current_version: 'v2.2.0',
+        latest_version: 'v2.2.0',
         release_name: '长龙航空畅飞助手 v2.0',
         release_notes: '当前已是最新发布版本。',
         page_url: 'https://github.com/eureka-wu/clairline/releases'
@@ -507,9 +504,7 @@ async function handleAuthSynced() {
   setTimeout(refreshAuthStatus, 600);
   setTimeout(refreshAuthStatus, 1500);
   initData();
-
-  // 核心自动化流水线：登录成功后，全自动触发全网 397 条航线普查，并弹出全屏高美感发光雷达进度条
-  startFullPatrol();
+  // 注意：不在这里自动触发全网普查（会瞬间打 397 次接口），需要时由用户手动点击。
 }
 
 // 就地微气泡状态与防抖定时器

@@ -112,8 +112,21 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
+def _migrate_refresh_token_column():
+    """新增 refresh_token 列（短信登录的无感续期凭据）。SQLite 不支持 IF NOT EXISTS，忽略重复错误即可。"""
+    try:
+        conn = get_connection()
+        with conn:
+            conn.execute("ALTER TABLE user_profile ADD COLUMN refresh_token TEXT NOT NULL DEFAULT ''")
+        conn.close()
+        print("[db] 已为 user_profile 增加 refresh_token 列")
+    except Exception:
+        pass
+
+
 def init_db():
     """初始化数据库表与索引，并平滑迁移历史配置与数据"""
+    _migrate_refresh_token_column()
     conn = get_connection()
     with conn:
         # 1. 巡检规则配置表 (patrol_config)
@@ -926,8 +939,8 @@ def save_user_profile(profile: dict, user_id: str = "default") -> None:
         with conn:
             conn.execute("""
                 INSERT INTO user_profile 
-                (user_id, user_name, mobile, member_level, cert_number, token, cookie, card_name, encrypted_user_id, sec_card_grant_tid, coupons_count, cards_count, points, is_verified, headers_json, template_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (user_id, user_name, mobile, member_level, cert_number, token, cookie, card_name, encrypted_user_id, sec_card_grant_tid, coupons_count, cards_count, points, is_verified, headers_json, template_json, updated_at, refresh_token)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     user_name = excluded.user_name,
                     mobile = excluded.mobile,
@@ -944,7 +957,8 @@ def save_user_profile(profile: dict, user_id: str = "default") -> None:
                     is_verified = excluded.is_verified,
                     headers_json = excluded.headers_json,
                     template_json = excluded.template_json,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    refresh_token = COALESCE(NULLIF(excluded.refresh_token, ''), user_profile.refresh_token)
             """, (
                 user_id,
                 profile.get("user_name") or "长龙会员",
@@ -962,7 +976,8 @@ def save_user_profile(profile: dict, user_id: str = "default") -> None:
                 int(profile.get("is_verified") or 0),
                 headers_json,
                 template_json,
-                profile.get("updated_at") or now_str
+                profile.get("updated_at") or now_str,
+                profile.get("refresh_token") or ""
             ))
 
     finally:

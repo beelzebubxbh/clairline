@@ -18,7 +18,7 @@
         <div class="version-banner-box">
           <div class="version-meta-row">
             <div class="version-label">
-              当前运行版本：<span class="version-tag-number">{{ updateInfo?.current_version || 'v2.1.0' }}</span>
+              当前运行版本：<span class="version-tag-number">{{ updateInfo?.current_version || 'v2.2.0' }}</span>
             </div>
             <div v-if="updateInfo?.has_update" class="status-badge badge-new">
               最新：{{ updateInfo?.latest_version }}

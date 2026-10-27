@@ -1,5 +1,5 @@
 /**
- * 会员认证、证书自检与嗅探抓包 API 接口层
+ * 会员认证 API 接口层（手机短信直登）
  */
 
 export async function fetchAuthStatus() {
@@ -8,49 +8,29 @@ export async function fetchAuthStatus() {
   return await res.json();
 }
 
-export async function startCapture() {
-  const res = await fetch('/api/capture/start', {
-    method: 'POST'
+/** 发送短信验证码。checkParam 来自网易易盾滑块通过后的 validate */
+export async function sendSmsCode(mobile, checkParam) {
+  const res = await fetch('/api/auth/send-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mobile, checkParam })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
-export async function stopCapture() {
-  const res = await fetch('/api/capture/stop', {
-    method: 'POST'
+/** 提交短信验证码完成登录 */
+export async function loginWithSmsCode(mobile, code, verifyId) {
+  const res = await fetch('/api/auth/login-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mobile, code, verifyId })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
 
-export async function fetchCaptureStatus() {
-  const res = await fetch('/api/capture/status');
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
-}
-
-export async function installCert() {
-  const res = await fetch('/api/cert/install', {
-    method: 'POST'
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
-}
-
-export async function uninstallCert() {
-  const res = await fetch('/api/cert/uninstall', {
-    method: 'POST'
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
-}
-
+/** 清空本地登录态 */
 export async function resetAuth() {
-  const res = await fetch('/api/auth/reset', {
-    method: 'POST'
-  });
+  const res = await fetch('/api/auth/reset', { method: 'POST' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
-
