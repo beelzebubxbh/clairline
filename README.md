@@ -96,6 +96,23 @@ cd clairline
 > 的旧逻辑，而清空发生在续期判断之前——所以续期永远走不到。本分支删掉了强制清空，
 > 至少让「Token 还没真过期」的情况下能继续用。
 
+### 想自己确认 Token 到底活多久
+
+仓库里带了一个探针：
+
+```bash
+python3 tools/token_probe.py                # 每 15 分钟探一次
+python3 tools/token_probe.py --interval 300 # 5 分钟一次
+python3 tools/token_probe.py --once         # 只探一次
+```
+
+它用当前的 `Authorization` 调最轻的 `AccountService_checkIfLogin`（响应约 130 字节），
+一旦返回 `100001` / `403` 就记下精确失效时间并退出。日志在 `~/.clairline/token-probe.log`。
+
+> **实验设计上的坑**：如果服务端是「滑动过期」（每次访问都续命），
+> 那么探测本身会延长寿命——测出来的是「至少活这么久」，不是真实 TTL。
+> 所以间隔别设太密，默认 15 分钟。你在网页上的正常使用同样会影响结果。
+
 ### 存在哪
 
 ```
