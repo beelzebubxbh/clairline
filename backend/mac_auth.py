@@ -52,6 +52,18 @@ def mark_expired():
         pass
 
 
+def is_marked_expired() -> bool:
+    """当前凭据是否已被判定失效（文件比失效标记新则视为重新登录过）"""
+    marked = max(_expired_at, _read_expired_flag())
+    if marked <= 0:
+        return False
+    try:
+        cred_mtime = CRED_PATH.stat().st_mtime
+    except Exception:
+        cred_mtime = 0
+    return cred_mtime <= marked
+
+
 def clear_expired():
     """重新登录成功后调用"""
     global _expired_at

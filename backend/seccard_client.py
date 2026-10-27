@@ -271,6 +271,12 @@ class SecCardClient:
     def _try_refresh(self) -> bool:
         """用 refreshToken 无感续期。成功返回 True。"""
         try:
+            import mac_auth
+            if mac_auth.is_marked_expired():
+                return False  # 已知失效，不必再试
+        except Exception:
+            pass
+        try:
             from loongair_client import refresh_access_token
             res = refresh_access_token()
             if res.get("ok"):
@@ -284,6 +290,18 @@ class SecCardClient:
     def call_api(self, method: str, params: dict, retry_on_auth_err: bool = True):
         # 调用前热重载检查
         self.check_and_reload()
+
+        # 已判定失效就直接报错，不要再往官方接口打请求
+        # （原实现每失败一次都会触发 2 次无用的续期调用，连续点击会放大故障）
+        try:
+            import mac_auth
+            if mac_auth.is_marked_expired():
+                raise AuthExpired("登录态已过期：请点击右上角用手机验证码重新登录")
+        except AuthExpired:
+            raise
+        except Exception:
+            pass
+
         if not self.headers:
             # 关键：先尝试用 refreshToken 自动续期。
             # 上游版本在这里直接报错，导致「跨自然日清空凭据」时续期永远用不上。

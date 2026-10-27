@@ -776,7 +776,12 @@ async function handleDateClick({ from, to, date, targetEl }) {
   } catch (e) {
     popover.value.loading = false;
     popover.value.visible = true;
-    showToast('查询航班异常，请重试');
+    if (e && e.authExpired) {
+      window.dispatchEvent(new CustomEvent('clairline:auth-expired'));
+      showToast('登录态已失效，请点右上角重新登录');
+    } else {
+      showToast('查询航班异常，请重试');
+    }
   }
 }
 
